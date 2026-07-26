@@ -11,9 +11,9 @@ after the change." A passing build can still ship architectural drift.
 
 Before editing, inventory the touched surface:
 
-- file size with `wc -l <path>` or `rg --files <scope> | xargs wc -l` when useful;
-- existing tests with `rg -n "#\\[cfg\\(test\\)|#\\[test\\]|tokio::test" <scope>`;
-- similar logic with `rg -n "<domain term>|<function stem>|<error type>" <scope>`;
+- file size with `wc -l <path>` or equivalent when useful;
+- existing tests with a search for `#[cfg(test)]`, `#[test]`, and async test attributes in scope;
+- similar logic with a search for domain terms, function stems, or error types;
 - active audit/debt notes when referenced by the task, issue, plan, or a maintained tracker.
 
 Dated one-off audit reports are historical context, not permanent live policy.
@@ -36,9 +36,11 @@ stopping additional drift on the surface you are already touching.
 
 ## 3. API shape gates
 
-- Six parameters is the review threshold. Adding a parameter at or above that
-  threshold requires a request, context, options, or builder type unless the
-  surrounding API already has a documented exception.
+- Skill gate: a change must not push a function past **six** parameters without
+  a request, context, options, or builder type (unless a documented exception
+  already exists). That means the resulting arity after the change must be ≤ 6.
+- Clippy's `too-many-arguments-threshold` is a looser mechanical backstop, not a
+  license to ignore the skill gate.
 - Avoid boolean parameters in public APIs unless the name at the call site is
   self-evident. Prefer a small enum for policy choices.
 - New public types must describe ownership, fallibility, and caller-visible
@@ -48,15 +50,15 @@ stopping additional drift on the surface you are already touching.
 
 ## 4. Duplication gates
 
-Search before adding logic for:
+Search before adding logic for repeated concerns such as:
 
-- canonical event parsing, validation, or schema conversion;
-- expert identifier and manifest validation;
-- byte-capacity, residency, pinning, and eviction accounting;
-- cache-policy state transitions and hit/miss classification;
-- run provenance and checksum handling;
-- JSON, CSV, and text report rendering;
-- dataset-adapter error mapping and source-order validation.
+- parsing, validation, and schema or format conversion;
+- identifier and key validation;
+- size, capacity, offset, and budget accounting;
+- error mapping and status/exit-code translation;
+- report, checksum, and provenance rendering;
+- path, timestamp, retry, and configuration resolution;
+- adapter or backend request/response mapping.
 
 Two copies can be transitional. A third copy is a design decision and needs a
 shared helper or an explicit divergence reason.
@@ -78,15 +80,15 @@ contract over silencing docs lints.
 ## 6. Test gates
 
 When touching critical logic, add or update focused tests for the behavior you
-changed. Critical surfaces include:
+changed. Critical surfaces typically include:
 
-- trace and model-manifest parsing and validation;
-- file-order replay and atomic active-set pin/use/release behavior;
-- cache capacity, residency, eviction, and policy state transitions;
-- object and byte metrics, reports, and provenance;
-- offline reference solvers and their applicability bounds;
+- input parsing and validation;
+- planning, scheduling, and policy decisions;
+- capacity, budget, and resource accounting;
+- deterministic reports, metrics, and checksums;
+- backend adapters and I/O boundary error handling;
 - command dispatch and exit-code behavior;
-- dataset adapters and deterministic conversion.
+- any module that owns safety invariants or `unsafe` encapsulation.
 
 If tests are impractical in the current turn, state the remaining gap and run
 the narrowest command that still exercises the touched path.
