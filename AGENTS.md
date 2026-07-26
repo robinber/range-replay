@@ -67,9 +67,10 @@ Denied in non-test Rust code:
 - undocumented public items, unless the package has an explicit narrower
   contract.
 
-The Cargo lint tables enforce most of this policy. The ban on `panic!` is also
-a repository rule even where a lint cannot enforce every occurrence. Tests may
-use stronger assertions and intentional panics when they improve diagnostics.
+The Cargo lint tables enforce most of this policy, including `clippy::panic`,
+`unwrap_used`, and `expect_used`. Tests may use stronger assertions and
+intentional panics when they improve diagnostics; `clippy.toml` allows
+unwrap/expect/panic in tests only.
 
 `io_uring` and other Linux-specific backends will eventually need carefully
 scoped `unsafe`. That is an explicit later decision: introduce it only behind a

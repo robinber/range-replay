@@ -16,12 +16,11 @@ When repository policy requires `RUSTDOCFLAGS="-D warnings"`, verify with:
 RUSTDOCFLAGS="-D warnings" cargo doc --all-features --no-deps
 ```
 
-In a workspace, add `--workspace` or package selection as appropriate. Once CI exists, it must preserve this gate. This means:
+In a workspace, add `--workspace` or package selection as appropriate. Once CI exists, it must preserve this gate. Under that flag:
 
-- Broken intra-doc links (`broken_intra_doc_links`) are build failures.
-- Bare URLs (`bare_urls`) are build failures when that lint is denied.
-- Private intra-doc links (`private_intra_doc_links`) are build failures when that lint is denied.
-- Any rustdoc warning is a build failure under `-D warnings`.
+- Broken intra-doc links are build failures.
+- Bare URLs and other rustdoc warnings are build failures.
+- Private intra-doc links are build failures when configured as warnings/denials in the package.
 
 When public docs or rustdoc examples change, verify locally with the documentation gate before finalizing.
 
@@ -32,10 +31,11 @@ When public docs or rustdoc examples change, verify locally with the documentati
 - Explain examples in the same terms a caller would use, and prefer one good example over many weak ones.
 - Make `Panics`, `Errors`, and `Safety` sections explicit when the API can trigger them; do not bury those details in prose.
 - For private helpers and trivial internal glue, write only the comments needed to keep the code readable.
+- When `missing_docs` is denied, every public item needs at least a short doc; a brief non-repetitive sentence is enough for obvious getters.
 
 ## 4. Allowed exceptions
 
 - Trivial private code, generated code, and one-line helpers do not need exhaustive documentation.
 - Internal modules that exist only to organize implementation details can stay lightly documented if they are not part of the API surface.
-- A short omission is acceptable for obvious getters, constructors, and pass-through wrappers when the surrounding type docs already cover the contract.
+- Omitting public docs is allowed only when the repository's lint policy permits it. Prefer a short doc over silence under `missing_docs = "deny"`.
 - If a doc example would be misleading because it omits essential setup, keep the example minimal and hide only the boilerplate needed for compilation.

@@ -28,17 +28,30 @@ Tests remain impact-scoped for lint, documentation, and policy-only changes. For
 
 When reporting verification, copy the exact command shape and scope: package, workspace/member selection, target (`--lib`, `--bin`, tests), feature set, and whether doctests or dependency-policy checks were included.
 
-## 3. Skill policy
+## 3. Manifest edit classes
+
+Not every `Cargo.toml` edit is the same. Classify before choosing gates:
+
+| Edit class | Examples | Minimum verification |
+|---|---|---|
+| Metadata-only | description, readme, authors, keywords | `cargo metadata --no-deps --format-version 1 --locked` (or equivalent parse) + `cargo +nightly fmt --all --check` if any Rust/fmt files also changed |
+| Lint / toolchain / feature policy | `[lints]`, features, `rust-version`, profile policy | full static baseline for the affected package/workspace selection |
+| Dependencies / supply chain | new deps, version bumps, `deny.toml` | full static baseline + `cargo deny check advisories licenses sources` (and `bans` when relevant) |
+| Code-adjacent package wiring | new targets, `[[bin]]`, path deps | clippy + tests for the affected targets |
+
+When in doubt between metadata-only and policy, use the stricter class.
+
+## 4. Skill policy
 
 - Always do an anchor pass over policy files and existing CI before editing.
 - Prefer the narrowest command that can fail for the change you made.
 - Escalate in this order when needed: package scope, `--all-targets`, `--all-features`, then workspace-wide selection.
-- Treat the full static baseline as mandatory when editing shared packages, root manifests, dependency policy, lint/toolchain policy, or feature plumbing.
+- Treat the full static baseline as mandatory for lint, feature, toolchain, dependency-policy, and shared-package changes — not for pure metadata renames.
 - Keep MSRV, lint policy, deny policy, and CI expectations aligned; if one changes, check the others.
 
-## 4. Allowed exceptions
+## 5. Allowed exceptions
 
-- If the change is manifest-only or formatting-only, a focused manifest check plus `rustfmt` is enough unless CI policy says otherwise.
+- If the change is pure formatting, `rustfmt --check` is enough unless CI policy says otherwise.
 - If the workspace is very large, first verify the affected package and direct dependents, then widen only if the change crosses package boundaries.
 - For documentation-only edits, you may skip full test execution unless doctests or public API examples changed.
 - If CI is the authoritative gate for a slow target, a local narrower check is acceptable as long as you clearly note the remaining gap.

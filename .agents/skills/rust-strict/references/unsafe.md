@@ -20,10 +20,18 @@ Hard rules:
 4. Every public `unsafe fn` must document `# Safety` preconditions.
 5. Prefer a small safe API over exporting raw unsafe operations.
 6. Do not dilute repo-wide `unsafe_code = "deny"` casually. If the package must use `unsafe`, relax the lint at the smallest module or item scope with `reason = "..."`, or adopt an explicit package policy documented in `AGENTS.md`.
-7. When changing `unsafe`, add or update tests for the safe abstraction's guarantees. Run Miri on supported targets when practical:
+7. Prefer mechanical enforcement: enable `clippy::undocumented_unsafe_blocks` and `clippy::multiple_unsafe_ops_per_block` when the package allows `unsafe`.
+8. When changing `unsafe`, add or update tests for the safe abstraction's guarantees. Prefer:
 
 ```bash
+# When the logic is Miri-compatible (pure memory / no unsupported syscalls):
 cargo +nightly miri test -p <package> -- <test-filter>
+
+# When Miri cannot run (device I/O, io_uring, many syscalls), compensate:
+# - focused safe-API tests and adversarial edge cases
+# - boundary assertions
+# - sanitizers when practical (`-Zsanitizer=address`, or `cargo careful` if available)
+# - careful review of drop/error paths
 ```
 
 ### Good SAFETY comments
@@ -42,11 +50,11 @@ State:
 | What invariant does the safe type maintain? | Documented on the type |
 | Can a safe caller break that invariant? | No |
 | Is the `unsafe` region minimal? | Yes |
-| Are error paths free of partial UB? | Yes |
+| Are error and early-return paths free of UB and left-behind broken invariants? | Yes |
 | Are drop/cleanup paths sound? | Yes |
 
 ## 3. Allowed exceptions
 
 - Generated bindings and vendor stubs may contain bulk `unsafe`; still isolate them and document the trust boundary.
 - Performance-motivated `unsafe` needs a measured reason and a safe baseline comparison when practical; "might be faster" is not enough.
-- If Miri cannot run (device I/O, unsupported syscalls), document the gap and compensate with focused tests, assertions at boundaries, and careful review.
+- If neither Miri nor sanitizers can cover the path, document the gap explicitly and do not claim full dynamic safety coverage.

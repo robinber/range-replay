@@ -32,7 +32,7 @@ Before acting, inspect the policy files that exist and define the effective cont
 - `Cargo.toml` — package metadata and/or `[workspace.package]` / `[workspace.lints]`, plus local `[lints]` tables.
 - `rust-toolchain.toml` — pinned toolchain channel, required components, and profile.
 - `.rustfmt.toml` — formatting baseline.
-- `clippy.toml` — MSRV, doc-valid-idents, and threshold knobs.
+- `clippy.toml` — MSRV, doc-valid-idents, test-allow knobs, and thresholds.
 - `.cargo/config.toml` — cargo aliases when present.
 - `deny.toml` — dependency advisory, license, and source policy.
 - `.github/workflows/*` — CI gates when present. If absent, use `AGENTS.md` and local policy files as the canonical gates and do not claim CI coverage.
@@ -57,14 +57,14 @@ Treat official and high-quality Rust ecosystem guidance as the default technical
 - [The Rustonomicon](https://doc.rust-lang.org/nomicon/) and the [Unsafe Code Guidelines](https://rust-lang.github.io/unsafe-code-guidelines/) when writing or reviewing `unsafe`.
 - [Microsoft Pragmatic Rust Guidelines](https://microsoft.github.io/rust-guidelines/) for scalable application/library design when the change is non-trivial.
 
-Repository policy, lint configuration, CI, and release process define the effective project contract. Follow them unless they conflict with the user's requested outcome or would normalize a correctness, safety, or compatibility regression.
+Repository policy (`AGENTS.md`, manifests, lint config, CI) is the effective project contract. If it conflicts with a user request, surface the conflict and get an explicit decision. Do not silently prefer either side, and do not normalize a correctness, safety, or compatibility regression.
 
 If a Cargo, Clippy, rustfmt, rustdoc, public-API, or safety fact is uncertain or version-sensitive, verify it against official documentation instead of relying on memory.
 
 ## Strictness profile
 
 - Be strict on runtime code, public APIs, error semantics, docs, safety contracts, dependency changes, and final verification.
-- Treat `-D warnings`, rustdoc warnings, `cargo deny` (when configured), lint policy inheritance, and no hidden panics in production code as the quality floor.
+- Treat `-D warnings`, rustdoc warnings, `cargo deny` (when configured), lint policy inheritance, and no hidden panics in non-test code as the quality floor.
 - Be pragmatic on tests, examples, benches, and private glue when extra ceremony would not improve signal.
 - Do not impose a generic Rust preference where the repository already has a documented and enforced policy.
 - Do not make nightly the default toolchain unless the owner deliberately changes `rust-toolchain.toml`.
@@ -92,12 +92,10 @@ Hard gates:
 
 - Do not grow a file already over 1,000 lines for feature work unless the change is a minimal bug fix, test-only addition, or an approved transitional step. Extract or split first when the requested change would add another responsibility.
 - Treat files over 800 lines as pressure zones: keep additions narrow, avoid new responsibilities, and prefer moving cohesive helpers into focused modules.
-- Do not add parameters to functions that already have 6 or more parameters; introduce a request, context, or options type unless there is a documented reason not to.
+- A change must not push a function past **six** parameters without introducing a request, context, or options type (unless a documented exception already exists). The Clippy `too-many-arguments` threshold is a looser mechanical backstop, not the skill gate.
 - Do not add a third copy of parsing, formatting, validation, config, path, timestamp, retry, or error-mapping logic. Extract a shared helper or justify why the behaviors must diverge.
 - Do not add broad `#[allow]` attributes. Every new allowance needs the smallest scope, `reason = "..."`, and a cleanup path if it is temporary.
 - If touching untested critical logic, add a focused test or state why the gap remains and which command gives the best available coverage.
-
-For more detail, load `references/drift-control.md`.
 
 ## Verification policy
 
@@ -124,7 +122,8 @@ Lints live in `Cargo.toml` (`[lints]` on a package, and/or `[workspace.lints]` i
 
 - Treat `cargo clippy ... -- -D warnings`, rustdoc `-D warnings`, and the repository's explicit lint denials as the safe strict baseline.
 - Every new workspace member must inherit workspace lints with `[lints] workspace = true` unless the operator approves a package-local exception.
-- Prefer enabling `clippy::pedantic` deliberately when the repo chooses it. Do not enable `clippy::nursery` or `clippy::restriction` as a group. Cherry-pick individual restriction or nursery lints after measuring signal.
+- Prefer enabling `clippy::pedantic` deliberately when the repo chooses it. Do **not** enable `clippy::nursery` or `clippy::restriction` as a group (they contain mutually exclusive or unstable lints). Cherry-pick individual nursery/restriction lints only after measuring signal.
+- Prefer mechanical enforcement of stated hard rules when Clippy has a lint for them (for example `unwrap_used`, `expect_used`, `panic`, `undocumented_unsafe_blocks`, `multiple_unsafe_ops_per_block`).
 - Fix the root cause of a lint instead of suppressing it unless the suppression is narrowly justified and documented.
 - Avoid broad `allow` attributes. New non-test suppressions need the smallest scope, `reason = "..."`, and a cleanup path if temporary.
 
@@ -142,8 +141,6 @@ Lint ratchet: tighten deliberately. Enforce new lint policy in runtime code firs
 
 For public traits in libraries, do not default to public `async fn`. Prefer `impl Future<Output = T> + Send` (or a concrete stream type) so `Send` stays explicit.
 
-Load `references/api-design.md` for the review checklist.
-
 ## Ownership and borrowing
 
 - Take ownership when the function needs ownership.
@@ -156,20 +153,22 @@ Load `references/api-design.md` for the review checklist.
 For sizes, offsets, lengths, capacities, and budgets:
 
 - Validate at the boundary; keep internal code on established invariants.
-- Prefer `checked_*`, `saturating_*` only when the saturation policy is intentional and documented, or `TryFrom` over silent truncation.
-- Reject overflow, underflow, empty invalid schedules, and out-of-range values with typed errors.
+- Prefer `checked_*` arithmetic and `TryFrom` conversions over silent truncation or narrowing `as` casts.
+- Use `saturating_*` only when the saturation policy is intentional and documented (budget hard-limits must not silently clamp).
+- Reject overflow, underflow, empty invalid inputs, and out-of-range values with typed errors.
 - Prefer newtypes when raw integers would mix distinct units (for example file offset vs length vs budget bytes).
+- Remember debug builds often panic on overflow while release may wrap unless `overflow-checks` is enabled. Do not treat a green debug test as proof that release arithmetic is safe; prefer checked math at boundaries either way.
 
 ## Error handling rules
 
 - Use typed errors where the caller can act on them (`thiserror` in libraries).
 - Keep error enums small and domain-oriented.
 - Preserve source errors when context matters.
-- Do not use `unwrap`, `expect`, `panic!`, `todo!`, or `unimplemented!` in production code (non-test, non-example, non-bench). Prefer typed errors and `?`.
-- A panic is acceptable only for a documented internal invariant that is truly a bug if broken; document it under `Panics` and prefer making the state unrepresentable.
+- In non-test production code, do not use `unwrap`, `expect`, `panic!`, `todo!`, or `unimplemented!`. Prefer typed errors and `?`.
+- When repository policy (for example `AGENTS.md`) bans panics in non-test code, that ban wins. Do not introduce invariant panics unless the operator explicitly approves a documented exception.
+- Prefer making illegal states unrepresentable over runtime panics.
 - In binaries and top-level orchestration, convert errors at the boundary and emit actionable context (`anyhow` is fine at that boundary only).
-
-Load `references/errors.md` for construction and panic-boundary detail.
+- Test-only `unwrap`/`expect`/`panic!` is allowed only when Clippy/repo knobs permit it (`allow-*-in-tests` in `clippy.toml`, or scoped expects). Do not assume test code is exempt from package lints by default.
 
 ## Unsafe and safety contracts
 
@@ -179,19 +178,16 @@ Default to safe Rust. Introduce `unsafe` only when required and approved by the 
 - Every `unsafe` block needs a `// SAFETY:` comment stating the invariants that make it sound.
 - Document safety preconditions on `unsafe fn` with a `# Safety` rustdoc section.
 - Prefer safe encapsulation so callers cannot violate invariants.
-- When `unsafe` changes, run the strongest practical checks (focused tests, and Miri when the code is Miri-compatible).
-
-Load `references/unsafe.md` before writing or reviewing `unsafe`.
+- Prefer lints that enforce this contract when available (`undocumented_unsafe_blocks`, `multiple_unsafe_ops_per_block`).
+- When `unsafe` changes, run the strongest practical checks: focused tests; Miri when the code is Miri-compatible; otherwise sanitizers / careful review for syscall or device I/O paths.
 
 ## Documentation rules
 
-- Public items should have rustdoc. Treat undocumented public API as a bug unless the repository chose a narrower policy.
+- Public items should have rustdoc. Treat undocumented public API as a bug unless the repository chose a narrower policy (`missing_docs` may make omission a build failure).
 - When the repo uses `RUSTDOCFLAGS="-D warnings"`, broken intra-doc links and other rustdoc warnings are build failures.
 - Include examples when they clarify usage or edge cases.
 - Add `Errors`, `Panics`, and `Safety` sections when relevant.
 - Keep examples compilable and aligned with the current API.
-
-Load `references/docs.md` for rustdoc gates and exceptions.
 
 ## Runtime architecture rules
 
@@ -226,8 +222,6 @@ Load `references/docs.md` for rustdoc gates and exceptions.
 - Tests and examples may trade strictness for clarity when the public contract is already covered.
 - Avoid over-architecting helper code that is only used in tests.
 
-Load `references/testing.md` for unit/integration/doctest expectations.
-
 ## Dependency rules
 
 - Treat `Cargo.toml`, `Cargo.lock`, and `deny.toml` edits as supply-chain changes.
@@ -253,16 +247,18 @@ Before considering a Rust change complete, confirm:
 
 ## Reference files
 
-Load these when you need more detail than this skill should carry:
+Load a reference only when the task needs that detail. Do not load every reference by default.
 
-- `references/workflow.md` — anchor pass, verification scoping, CI alignment.
-- `references/testing.md` — unit, integration, doctest, fixtures, property tests.
-- `references/lints.md` — manifest lint policy, Clippy groups, suppressions.
-- `references/docs.md` — rustdoc expectations and public examples.
-- `references/api-design.md` — public API shape, constructors, naming, checklist.
-- `references/errors.md` — recoverable errors, panic boundaries, fallible construction.
-- `references/unsafe.md` — `unsafe` boundaries, SAFETY comments, verification.
-- `references/cli-systems.md` — thin `main.rs`, exit codes, stdout/stderr.
-- `references/drift-control.md` — no-net-new-debt gates and audit-aware edits.
+| Load when… | File |
+|---|---|
+| verification scoping, manifests, CI alignment | `references/workflow.md` |
+| unit/integration/doctest, fixtures, property tests | `references/testing.md` |
+| Clippy groups, suppressions, lint ratchet | `references/lints.md` |
+| rustdoc gates and public examples | `references/docs.md` |
+| public API shape, constructors, naming checklist | `references/api-design.md` |
+| recoverable errors, panic boundaries, construction | `references/errors.md` |
+| writing or reviewing `unsafe` | `references/unsafe.md` |
+| thin `main`, exit codes, stdout/stderr | `references/cli-systems.md` |
+| large files, duplication, debt-sensitive surfaces | `references/drift-control.md` |
 
 Keep this file short. Put deep, stable reference material in the files above rather than expanding this skill body.

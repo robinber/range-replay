@@ -36,9 +36,11 @@ stopping additional drift on the surface you are already touching.
 
 ## 3. API shape gates
 
-- Six parameters is the review threshold. Adding a parameter at or above that
-  threshold requires a request, context, options, or builder type unless the
-  surrounding API already has a documented exception.
+- Skill gate: a change must not push a function past **six** parameters without
+  a request, context, options, or builder type (unless a documented exception
+  already exists). That means the resulting arity after the change must be ≤ 6.
+- Clippy's `too-many-arguments-threshold` is a looser mechanical backstop, not a
+  license to ignore the skill gate.
 - Avoid boolean parameters in public APIs unless the name at the call site is
   self-evident. Prefer a small enum for policy choices.
 - New public types must describe ownership, fallibility, and caller-visible
