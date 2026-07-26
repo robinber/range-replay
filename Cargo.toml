@@ -1,0 +1,96 @@
+[workspace]
+resolver = "3"
+members = ["crates/range-replay-cli", "crates/range-replay-core"]
+
+[workspace.dependencies]
+range-replay-core = { path = "crates/range-replay-core", version = "0.1.0" }
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.97.0"
+license = "MIT"
+publish = false
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+elided_lifetimes_in_paths = "deny"
+missing_docs = "deny"
+rust_2018_idioms = { level = "deny", priority = -1 }
+unreachable_pub = "warn"
+unused_crate_dependencies = "warn"
+unused_lifetimes = "deny"
+unused_macro_rules = "deny"
+unused_qualifications = "deny"
+
+[workspace.lints.rustdoc]
+bare_urls = "deny"
+broken_intra_doc_links = "deny"
+private_intra_doc_links = "deny"
+
+[workspace.lints.clippy]
+correctness = { level = "deny", priority = -1 }
+suspicious = { level = "deny", priority = -1 }
+complexity = { level = "warn", priority = -1 }
+perf = { level = "warn", priority = -1 }
+style = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+dbg_macro = "deny"
+expect_used = "deny"
+todo = "deny"
+unimplemented = "deny"
+unwrap_used = "deny"
+cast_lossless = "warn"
+cast_possible_truncation = "warn"
+cast_possible_wrap = "warn"
+cast_precision_loss = "warn"
+clone_on_ref_ptr = "warn"
+cloned_instead_of_copied = "warn"
+doc_markdown = "warn"
+elidable_lifetime_names = "warn"
+flat_map_option = "warn"
+float_cmp = "warn"
+format_push_string = "warn"
+ignored_unit_patterns = "warn"
+implicit_clone = "warn"
+inefficient_to_string = "warn"
+manual_let_else = "warn"
+redundant_closure_for_method_calls = "warn"
+assigning_clones = "warn"
+manual_assert = "warn"
+manual_string_new = "warn"
+map_err_ignore = "warn"
+map_unwrap_or = "warn"
+match_same_arms = "warn"
+match_wild_err_arm = "warn"
+match_wildcard_for_single_variants = "warn"
+missing_errors_doc = "warn"
+must_use_candidate = "warn"
+needless_pass_by_value = "warn"
+needless_raw_string_hashes = "warn"
+return_self_not_must_use = "warn"
+semicolon_if_nothing_returned = "warn"
+single_match_else = "warn"
+struct_field_names = "warn"
+uninlined_format_args = "warn"
+unnested_or_patterns = "warn"
+unnecessary_literal_bound = "warn"
+unnecessary_trailing_comma = "warn"
+unnecessary_wraps = "warn"
+unused_async = "warn"
+unused_self = "warn"
+zero_sized_map_values = "warn"
+allow_attributes_without_reason = "warn"
+error_impl_error = "warn"
+host_endian_bytes = "warn"
+pathbuf_init_then_push = "warn"
+rc_buffer = "warn"
+rc_mutex = "warn"
+unused_result_ok = "warn"
+verbose_file_reads = "warn"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"

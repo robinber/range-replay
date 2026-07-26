@@ -1,0 +1,7 @@
+[alias]
+lint = "clippy --workspace --all-targets --all-features -- -D warnings"
+lint-app = "clippy --workspace --lib --bins --all-features -- -D warnings"
+lint-pedantic = "clippy --workspace --all-targets --all-features -- -D warnings -D clippy::pedantic"
+test-all = "test --workspace --all-features"
+doc-all = "doc --workspace --all-features --no-deps"
+deny-all = "deny check advisories licenses sources"

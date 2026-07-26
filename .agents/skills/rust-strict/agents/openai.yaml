@@ -1,0 +1,4 @@
+interface:
+  display_name: "Rust Strict"
+  short_description: "Strict Rust workflow, verification, API, error-handling, and drift-control guidance"
+  default_prompt: "Use $rust-strict to build, refactor, debug, review, or document this Rust project with strict Cargo, lint, API, error-handling, drift-control, and verification discipline."
