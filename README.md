@@ -9,8 +9,9 @@ file-range read schedules on Linux.
 
 ## Status
 
-**Early implementation.** The validated `ReadRange` value type exists. No
-schedule format, coalescing, backend, or CLI behavior does yet.
+**Early implementation.** The validated `ReadRange` value type and deterministic
+coalescing of overlapping or adjacent ranges exist. No schedule format, backend,
+or CLI behavior does yet.
 
 The project is deliberately bounded. It is a Rust and Linux systems-learning
 exercise, not a production storage engine or a general-purpose async runtime.
