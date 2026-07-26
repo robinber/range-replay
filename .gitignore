@@ -1,0 +1,26 @@
+# Rust build output
+/target/
+
+# Local secrets and environment
+.env
+.env.*
+!.env.example
+/.kira/
+
+# Local agent state
+/.codex/
+/.playwright-mcp/
+
+# Operating-system and editor files
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+
+# Local datasets and generated results
+/data/
+/datasets/
+/results/
+/benchmarks/output/
+/device-profiles/local/

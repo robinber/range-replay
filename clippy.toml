@@ -1,0 +1,15 @@
+msrv = "1.97.0"
+doc-valid-idents = [
+  "CLI",
+  "CSV",
+  "EOF",
+  "JSON",
+  "Linux",
+  "NVMe",
+  "Rust",
+  "SSD",
+  "TOML",
+  "io_uring",
+]
+too-many-arguments-threshold = 7
+type-complexity-threshold = 250

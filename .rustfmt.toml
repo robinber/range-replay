@@ -1,0 +1,11 @@
+# This workspace intentionally uses nightly-only rustfmt options. Run
+# `cargo +nightly fmt --all` and `cargo +nightly fmt --all --check`.
+edition = "2024"
+style_edition = "2024"
+group_imports = "StdExternalCrate"
+imports_granularity = "Module"
+normalize_comments = true
+reorder_impl_items = true
+use_field_init_shorthand = true
+use_try_shorthand = true
+wrap_comments = true
