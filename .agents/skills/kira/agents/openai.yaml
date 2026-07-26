@@ -1,4 +1,0 @@
-interface:
-  display_name: "Kira"
-  short_description: "kira-mux multi-agent workspace for range-replay (open, send, capture, orchestrate)"
-  default_prompt: "Use $kira to open the range-replay workspace, dispatch work to claude/codex/grok, capture replies, and follow the supervised slice orchestration model."
