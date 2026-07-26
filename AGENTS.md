@@ -17,6 +17,8 @@ to make the engineering and verification contracts explicit.
    [`.rustfmt.toml`](.rustfmt.toml), [`clippy.toml`](clippy.toml), and
    [`deny.toml`](deny.toml).
 5. Subsystem documentation next to the code being changed.
+6. For multi-agent orchestration, use `kira-mux` (project id `range-replay`).
+   Prefer `kira-mux examples` for CLI recipes instead of a repo-local Kira skill.
 
 When these documents appear to disagree, stop and surface the conflict. Do not
 silently choose the interpretation that permits more work.
@@ -221,6 +223,30 @@ Stay small. Prefer one bounded slice with an explicit stop condition:
 
 Close a slice only from reviewable evidence. Prefer several small changes over
 one long march through the roadmap.
+
+## Multi-agent (Kira)
+
+This repo is registered with `kira-mux` as project id `range-replay`
+(machine config: `~/.config/kira-mux/projects/range-replay.toml`). Default
+agents: `claude`, `codex`, `grok` (allow-all).
+
+Do **not** maintain a repo-local Kira skill. CLI recipes live in the tool:
+
+```bash
+kira-mux examples
+kira-mux status range-replay   # or `.` from this repo
+kira-mux agents list range-replay
+kira-mux send range-replay codex "…"
+kira-mux capture range-replay codex --lines 80
+```
+
+When coordinating work through Kira:
+
+1. One bounded, operator-approved slice at a time.
+2. Independent review axes when using multiple agents.
+3. Capture evidence; do not invent results from pane liveness alone.
+4. Operator remains the gate for merge, publish, and irreversible actions.
+5. All Rust work still loads `.agents/skills/rust-strict/SKILL.md`.
 
 ## Research and public claims
 
