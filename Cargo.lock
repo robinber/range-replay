@@ -3,12 +3,5 @@
 version = 4
 
 [[package]]
-name = "range-replay-cli"
-version = "0.1.0"
-dependencies = [
- "range-replay-core",
-]
-
-[[package]]
-name = "range-replay-core"
+name = "range-replay"
 version = "0.1.0"

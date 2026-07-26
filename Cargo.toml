@@ -1,17 +1,14 @@
-[workspace]
-resolver = "3"
-members = ["crates/range-replay-cli", "crates/range-replay-core"]
-
-[workspace.dependencies]
-range-replay-core = { path = "crates/range-replay-core", version = "0.1.0" }
-
-[workspace.package]
+[package]
+name = "range-replay"
+version = "0.1.0"
+description = "Educational file-range read schedules with pread and io_uring backends"
+readme = "README.md"
 edition = "2024"
 rust-version = "1.97.0"
 license = "MIT"
 publish = false
 
-[workspace.lints.rust]
+[lints.rust]
 unsafe_code = "deny"
 elided_lifetimes_in_paths = "deny"
 missing_docs = "deny"
@@ -22,12 +19,12 @@ unused_lifetimes = "deny"
 unused_macro_rules = "deny"
 unused_qualifications = "deny"
 
-[workspace.lints.rustdoc]
+[lints.rustdoc]
 bare_urls = "deny"
 broken_intra_doc_links = "deny"
 private_intra_doc_links = "deny"
 
-[workspace.lints.clippy]
+[lints.clippy]
 correctness = { level = "deny", priority = -1 }
 suspicious = { level = "deny", priority = -1 }
 complexity = { level = "warn", priority = -1 }

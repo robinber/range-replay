@@ -21,27 +21,24 @@ to make the engineering and verification contracts explicit.
 When these documents appear to disagree, stop and surface the conflict. Do not
 silently choose the interpretation that permits more work.
 
-## Current workspace facts
+## Current package facts
 
-- Cargo workspace with resolver `3`, edition `2024`, and Rust `1.97.0`.
-- Source license: MIT. Workspace packages are not published by default.
-- The intended initial layout is deliberately small:
+- Single Cargo package at the repository root: `range-replay`.
+- Edition `2024`, Rust `1.97.0`, license MIT, not published by default.
+- Layout is deliberately minimal:
 
   ```text
-  crates/
-    range-replay-core/   schedule validation, coalescing, planning, domain errors
-    range-replay-cli/    CLI surface, backend selection, report rendering
-  fixtures/
-  docs/
+  src/
+    lib.rs     library surface (planning, validation, backends later)
+    main.rs    thin binary entrypoint
   ```
 
-- Initial dependency direction: `range-replay-cli -> range-replay-core`.
-- Every future workspace crate must inherit workspace lint policy with
-  `[lints] workspace = true`.
-- `Cargo.lock` must be committed once generated because the workspace contains
-  an application.
+- `Cargo.lock` is committed because this package builds an application.
+- Do not introduce a multi-crate workspace until there is a demonstrated need
+  (isolated dependencies, multiple binaries with different graphs, or a clear
+  ownership boundary with more than one consumer).
 
-Do not describe planned commands, crates, formats, or results as implemented.
+Do not describe planned commands, modules, formats, or results as implemented.
 
 ## Working rules
 
@@ -51,10 +48,7 @@ Do not describe planned commands, crates, formats, or results as implemented.
 - Work one bounded slice at a time and satisfy its gate before starting another.
 - Do **not** auto-chain into the next milestone. After a gate, the operator
   chooses continue / side quest / pause.
-- Follow existing boundaries before introducing new abstractions.
-- Start with the two planned crates. Add a crate only when it has multiple real
-  consumers, requires isolated dependencies or verification, or represents a
-  demonstrated ownership boundary.
+- Follow existing module boundaries before introducing new abstractions.
 - Work test-first when practical. For bugs, reproduce or localize the root
   cause before editing.
 - Match the style of the file being edited.
@@ -70,7 +64,8 @@ Denied in non-test Rust code:
 
 - `unsafe_code`;
 - `unwrap`, `expect`, `panic!`, `todo!`, `unimplemented!`, and `dbg!`;
-- undocumented public items, unless a crate has an explicit narrower contract.
+- undocumented public items, unless the package has an explicit narrower
+  contract.
 
 The Cargo lint tables enforce most of this policy. The ban on `panic!` is also
 a repository rule even where a lint cannot enforce every occurrence. Tests may
@@ -83,53 +78,36 @@ blanket policy relaxation.
 
 Preferred patterns:
 
-- Use `thiserror` for library errors. Use `anyhow` only in binaries and
-  application entrypoints.
+- Use `thiserror` for library errors. Use `anyhow` only at the binary boundary.
 - Return typed, actionable errors for invalid ranges, overflow, EOF, partial
   reads, and I/O failures.
-- Keep `main.rs` thin; put behavior in testable modules.
-- Keep the core synchronous and deterministic. Add async only at a measured
-  I/O boundary that establishes a real need.
-- Prefer workspace-level dependencies over repeated per-crate declarations.
-  Add no dependency without a current use and a license/source-policy check.
+- Keep `main.rs` thin; put behavior in the library so it stays testable.
+- Keep planning and validation synchronous and deterministic. Add async only at
+  a measured I/O boundary that establishes a real need.
+- Add no dependency without a current use and a license/source-policy check.
 - Keep intentional lint exceptions local with
   `#[expect(..., reason = "...")]`; do not add broad allowances.
-- `clippy::pedantic` is enabled workspace-wide.
+- `clippy::pedantic` is enabled package-wide.
   `clippy::restriction` is not enabled as a group; only the selected
   low-noise rules in `Cargo.toml` apply.
 - Read secrets from environment variables or untracked local configuration and
   redact them from logs, reports, diagnostics, and provenance.
 
-## Architecture boundaries
+## Architecture notes
 
-### `range-replay-core`
+The package is still taking shape. Until modules exist, prefer:
 
-Owns pure domain types, schedule validation, range coalescing, in-flight budget
-accounting, deterministic planning, checksum helpers that do not require I/O,
-and domain errors.
+- pure planning / validation / coalescing logic separate from I/O backends;
+- typed errors at domain boundaries;
+- thin CLI or binary glue that only parses, dispatches, and renders.
 
-The core must not depend on:
-
-- CLI parsing or presentation;
-- filesystem-specific adapters beyond pure path/value types when unavoidable;
-- async runtimes;
-- `io_uring` or other physical I/O backends;
-- GPU, HTTP services, or plugin systems.
-
-Inputs should be explicit values or streams supplied by callers. Equal inputs
-and configuration must produce equal deterministic plans, byte counts, and
-operation counts.
-
-### `range-replay-cli`
-
-Owns command-line parsing, file adapters, configuration loading, backend
-selection (`pread` reference vs `io_uring`), report rendering, and composition
-of core use cases. Keep schedule policy and coalescing semantics out of this
-crate.
+Do not invent crates or plugin layers early. Split only when a real need is
+demonstrated.
 
 ## Correctness invariants
 
-These rules are correctness requirements, not implementation suggestions:
+These rules are correctness requirements for `v0.1`, not implementation
+suggestions:
 
 - Invalid ranges, overflows, and empty schedules are rejected with typed errors
   before any backend runs.
@@ -181,42 +159,29 @@ Reference quality gates:
 ```bash
 cargo +nightly fmt --all
 cargo +nightly fmt --all --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace --all-features
-RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all-features
+RUSTDOCFLAGS="-D warnings" cargo doc --all-features --no-deps
 cargo deny check advisories licenses sources
 ```
 
 Cargo aliases in `.cargo/config.toml`: `lint`, `lint-app`, `lint-pedantic`,
 `test-all`, `doc-all`, and `deny-all`.
 
-Prefer narrow verification commands scoped to the packages that changed.
-Do not claim source or test coverage for packages that do not exist.
+Prefer narrow verification commands scoped to what changed.
+Do not claim source or test coverage for code that does not exist.
 
 ## Verification baseline
 
 Default verification is impact-scoped. Run the narrowest checks that exercise
 what changed, then widen when evidence is insufficient.
 
-Use focused package or test filters during implementation, for example:
-
-```bash
-cargo test -p range-replay-core <test-filter>
-cargo test -p range-replay-cli <test-filter>
-```
-
 Widen static checks when:
 
 - public APIs or correctness invariants change;
-- a change crosses the core/CLI boundary;
-- workspace policy, dependencies, or report contracts change;
+- package policy, dependencies, or report contracts change;
 - preparing a release;
 - narrow checks cannot demonstrate the slice gate.
-
-Workspace-wide tests are appropriate for cross-cutting shared-contract changes
-or when the operator explicitly requests them. Documentation-only and
-workspace-policy changes remain impact-scoped unless they invalidate broader
-evidence.
 
 Only claim a command passed if it was run and its output was checked. Record
 the exact commands, results, and any unverified gaps. A passing command is
@@ -269,7 +234,7 @@ one long march through the roadmap.
 Before claiming a change complete, confirm that:
 
 - it belongs to the active slice (not an unrequested later exploration);
-- no deferred surface or unnecessary crate was introduced;
+- no deferred surface or unnecessary crate split was introduced;
 - correctness invariants still hold;
 - deterministic and provenance requirements are covered;
 - public items and behavior changes are documented;
