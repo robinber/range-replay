@@ -31,10 +31,11 @@ silently choose the interpretation that permits more work.
 
   ```text
   src/
-    lib.rs     library surface (planning, validation, backends later)
-    plan.rs    pure planning over range collections (coalescing)
-    range.rs   validated file-range value types
-    main.rs    thin binary entrypoint
+    lib.rs       library surface (planning, validation, backends later)
+    plan.rs      pure planning over range collections (coalescing)
+    range.rs     validated file-range value types
+    schedule.rs  textual schedule parsing (`offset,length` lines)
+    main.rs      thin binary entrypoint
   ```
 
 - `Cargo.lock` is committed because this package builds an application.

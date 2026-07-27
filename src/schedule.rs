@@ -96,9 +96,9 @@ pub enum ScheduleError {
 /// assert_eq!(
 ///     schedule,
 ///     vec![
-///         ReadRange::try_new(10, 5).map_err(Box::new)?,
-///         ReadRange::try_new(12, 8).map_err(Box::new)?,
-///         ReadRange::try_new(30, 2).map_err(Box::new)?,
+///         ReadRange::try_new(10, 5)?,
+///         ReadRange::try_new(12, 8)?,
+///         ReadRange::try_new(30, 2)?,
 ///     ],
 /// );
 ///
