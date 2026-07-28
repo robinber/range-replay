@@ -3,6 +3,9 @@
 //! Planning turns a caller's logical schedule into a canonical plan. It stays
 //! deterministic and synchronous, and it never touches a file: file sizes, EOF,
 //! buffers, and backends belong to later slices.
+//!
+//! The validated boundary type is [`ReadPlan`]; [`coalesce`] is the pure merge
+//! used to build it.
 
 use thiserror::Error;
 
@@ -35,6 +38,11 @@ pub enum PlanError {
 /// provenance and reporting, and the returned plan is newly owned. Overlapping
 /// and adjacent ranges merge, gaps stay intact, and the output is sorted by
 /// ascending offset with neither overlap nor adjacency left between neighbours.
+///
+/// The returned `Vec<ReadRange>` is canonical, but its type proves nothing: an
+/// arbitrary vector looks the same. [`ReadPlan::try_from_schedule`] wraps this
+/// same transformation in the validated boundary type that later backends will
+/// accept; prefer it whenever the invariants must travel with the value.
 ///
 /// Two ranges merge when `current.offset() <= last.end()`, which covers overlap
 /// and exact adjacency in one comparison because the bounds are half-open. A
@@ -118,7 +126,7 @@ pub fn coalesce(ranges: &[ReadRange]) -> Result<Vec<ReadRange>, PlanError> {
 /// # Examples
 ///
 /// ```
-/// use range_replay::{ReadPlan, ReadRange};
+/// use range_replay::{PlanError, ReadPlan, ReadRange};
 ///
 /// let schedule = [
 ///     ReadRange::try_new(10, 2)?,
@@ -132,6 +140,11 @@ pub fn coalesce(ranges: &[ReadRange]) -> Result<Vec<ReadRange>, PlanError> {
 ///
 /// assert_eq!(bounds, vec![(0, 7), (10, 12)]);
 /// assert_eq!(schedule.len(), 3);
+///
+/// assert_eq!(
+///     ReadPlan::try_from_schedule(&[]),
+///     Err(PlanError::EmptySchedule)
+/// );
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -144,7 +157,8 @@ impl ReadPlan {
     ///
     /// The schedule is coalesced exactly like [`coalesce`]: overlapping and
     /// adjacent ranges merge, gaps stay intact, and equal inputs produce equal
-    /// plans.
+    /// plans. Construction is pure and deterministic: it performs no I/O,
+    /// consults no file size, and leaves the borrowed schedule untouched.
     ///
     /// # Errors
     ///
