@@ -2,9 +2,10 @@
 //!
 //! A schedule is the caller's ordered list of read requests. Parsing turns
 //! text into validated [`ReadRange`] values and nothing more: sorting and
-//! merging belong to [`coalesce`](crate::coalesce), which reduces a schedule
-//! to a canonical plan while the original schedule stays available for
-//! provenance and reporting.
+//! merging belong to planning, where
+//! [`ReadPlan`](crate::ReadPlan) reduces a schedule to a validated canonical
+//! plan while the original schedule stays available for provenance and
+//! reporting.
 
 use std::num::ParseIntError;
 
@@ -71,7 +72,8 @@ pub enum ScheduleError {
 /// The returned schedule is newly owned, contains only ranges built through
 /// [`ReadRange::try_new`], and preserves the source order of the range lines.
 /// Parsing never sorts or merges; pass the schedule to
-/// [`coalesce`](crate::coalesce) to produce the canonical plan. Empty or
+/// [`ReadPlan::try_from_schedule`](crate::ReadPlan::try_from_schedule) to
+/// produce the validated canonical plan. Empty or
 /// whitespace-only input parses to an empty `Vec`: rejecting an empty
 /// schedule stays a planning decision
 /// ([`PlanError::EmptySchedule`](crate::PlanError::EmptySchedule)), not a

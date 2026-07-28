@@ -3,6 +3,9 @@
 //! Planning turns a caller's logical schedule into a canonical plan. It stays
 //! deterministic and synchronous, and it never touches a file: file sizes, EOF,
 //! buffers, and backends belong to later slices.
+//!
+//! The validated boundary type is [`ReadPlan`]; [`coalesce`] is the pure merge
+//! used to build it.
 
 use thiserror::Error;
 
@@ -35,6 +38,11 @@ pub enum PlanError {
 /// provenance and reporting, and the returned plan is newly owned. Overlapping
 /// and adjacent ranges merge, gaps stay intact, and the output is sorted by
 /// ascending offset with neither overlap nor adjacency left between neighbours.
+///
+/// The returned `Vec<ReadRange>` is canonical, but its type proves nothing: an
+/// arbitrary vector looks the same. [`ReadPlan::try_from_schedule`] wraps this
+/// same transformation in the validated boundary type that later backends will
+/// accept; prefer it whenever the invariants must travel with the value.
 ///
 /// Two ranges merge when `current.offset() <= last.end()`, which covers overlap
 /// and exact adjacency in one comparison because the bounds are half-open. A
@@ -99,6 +107,80 @@ pub fn coalesce(ranges: &[ReadRange]) -> Result<Vec<ReadRange>, PlanError> {
     Ok(coalesced)
 }
 
+/// A canonical read plan whose construction invariants are established once.
+///
+/// `ReadPlan` is the validated input boundary for later read backends. A bare
+/// `Vec<ReadRange>` cannot promise anything about its contents, so backends
+/// accepting one would have to re-check ordering and overlap on every call.
+/// A `ReadPlan` can only be built through [`ReadPlan::try_from_schedule`],
+/// which guarantees that the owned ranges are sorted by ascending offset with
+/// neither overlap nor adjacency between neighbours, and that the plan holds
+/// at least one range.
+///
+/// Construction borrows the caller's schedule and owns the canonical output:
+/// the original schedule stays untouched and usable, and the plan remains
+/// valid after the schedule has gone out of scope. The ranges are only exposed
+/// immutably through [`ReadPlan::ranges`], so no caller can break the
+/// invariants after construction.
+///
+/// # Examples
+///
+/// ```
+/// use range_replay::{PlanError, ReadPlan, ReadRange};
+///
+/// let schedule = [
+///     ReadRange::try_new(10, 2)?,
+///     ReadRange::try_new(0, 4)?,
+///     ReadRange::try_new(4, 3)?,
+/// ];
+///
+/// let plan = ReadPlan::try_from_schedule(&schedule)?;
+/// let bounds: Vec<(u64, u64)> =
+///     plan.ranges().iter().map(|range| (range.offset(), range.end())).collect();
+///
+/// assert_eq!(bounds, vec![(0, 7), (10, 12)]);
+/// assert_eq!(schedule.len(), 3);
+///
+/// assert_eq!(
+///     ReadPlan::try_from_schedule(&[]),
+///     Err(PlanError::EmptySchedule)
+/// );
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReadPlan {
+    ranges: Vec<ReadRange>,
+}
+
+impl ReadPlan {
+    /// Builds a canonical plan from a borrowed schedule.
+    ///
+    /// The schedule is coalesced exactly like [`coalesce`]: overlapping and
+    /// adjacent ranges merge, gaps stay intact, and equal inputs produce equal
+    /// plans. Construction is pure and deterministic: it performs no I/O,
+    /// consults no file size, and leaves the borrowed schedule untouched.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PlanError::EmptySchedule`] when `schedule` is empty, and
+    /// [`PlanError::UnrepresentableMerge`] if a merge produced bounds outside
+    /// the [`ReadRange`] contract. The second case cannot occur for validated
+    /// input; it guards a coalescing logic error rather than a caller mistake.
+    pub fn try_from_schedule(schedule: &[ReadRange]) -> Result<Self, PlanError> {
+        coalesce(schedule).map(|ranges| Self { ranges })
+    }
+
+    /// Returns the canonical ranges, sorted by ascending offset with neither
+    /// overlap nor adjacency between neighbours.
+    ///
+    /// The slice is never empty and borrows from the plan, so the invariants
+    /// established at construction cannot be broken through it.
+    #[must_use]
+    pub fn ranges(&self) -> &[ReadRange] {
+        &self.ranges
+    }
+}
+
 fn merged_range(offset: u64, end: u64) -> Result<ReadRange, PlanError> {
     end.checked_sub(offset)
         .and_then(|length| ReadRange::try_new(offset, length).ok())
@@ -107,7 +189,7 @@ fn merged_range(offset: u64, end: u64) -> Result<ReadRange, PlanError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{PlanError, coalesce};
+    use super::{PlanError, ReadPlan, coalesce};
     use crate::range::ReadRange;
 
     fn span(start: u64, end: u64) -> ReadRange {
@@ -187,6 +269,55 @@ mod tests {
 
         assert_eq!(schedule, original);
         assert_ne!(bounds(&plan), bounds(&original));
+    }
+
+    #[test]
+    fn read_plan_rejects_an_empty_schedule() {
+        assert_eq!(
+            ReadPlan::try_from_schedule(&[]),
+            Err(PlanError::EmptySchedule)
+        );
+    }
+
+    #[test]
+    fn read_plan_matches_the_hand_calculated_fixture() {
+        let schedule = [span(10, 12), span(0, 4), span(4, 7)];
+
+        let plan = ReadPlan::try_from_schedule(&schedule).expect("schedule is not empty");
+
+        assert_eq!(bounds(plan.ranges()), vec![(0, 7), (10, 12)]);
+    }
+
+    #[test]
+    fn read_plan_agrees_with_coalesce() {
+        let schedule = [span(10, 15), span(12, 20), span(0, 4), span(5, 7)];
+
+        let plan = ReadPlan::try_from_schedule(&schedule).expect("schedule is not empty");
+        let coalesced = coalesce(&schedule).expect("schedule is not empty");
+
+        assert_eq!(plan.ranges(), coalesced.as_slice());
+    }
+
+    #[test]
+    fn read_plan_leaves_the_schedule_unchanged() {
+        let schedule = [span(10, 12), span(4, 7), span(0, 4)];
+        let original = schedule;
+
+        let plan = ReadPlan::try_from_schedule(&schedule).expect("schedule is not empty");
+
+        assert_eq!(schedule, original);
+        assert_ne!(bounds(plan.ranges()), bounds(&original));
+    }
+
+    #[test]
+    fn read_plan_outlives_the_schedule() {
+        let plan = {
+            let schedule = vec![span(10, 12), span(0, 4), span(4, 7)];
+
+            ReadPlan::try_from_schedule(&schedule).expect("schedule is not empty")
+        };
+
+        assert_eq!(bounds(plan.ranges()), vec![(0, 7), (10, 12)]);
     }
 
     #[test]

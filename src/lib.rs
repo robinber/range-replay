@@ -6,6 +6,6 @@ mod plan;
 mod range;
 mod schedule;
 
-pub use crate::plan::{PlanError, coalesce};
+pub use crate::plan::{PlanError, ReadPlan, coalesce};
 pub use crate::range::{RangeError, ReadRange};
 pub use crate::schedule::{ScheduleError, parse_schedule};
