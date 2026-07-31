@@ -170,11 +170,13 @@ impl RangeOutput {
 ///
 /// ```
 /// use std::fs::File;
+/// use std::io::Write;
 ///
 /// use range_replay::{ReadPlan, ReadRange, read_plan};
 ///
-/// let path = std::env::temp_dir().join("range-replay-doc-read-plan");
-/// std::fs::write(&path, b"0123456789abcdef")?;
+/// let path = std::env::temp_dir()
+///     .join(format!("range-replay-doc-read-plan-{}", std::process::id()));
+/// File::create_new(&path)?.write_all(b"0123456789abcdef")?;
 ///
 /// let file = File::open(&path)?;
 /// let plan = ReadPlan::try_from_schedule(&[
