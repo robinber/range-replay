@@ -31,7 +31,7 @@ silently choose the interpretation that permits more work.
 
   ```text
   src/
-    lib.rs       library surface (planning, validation, backends later)
+    lib.rs       library surface (planning, validation, backends)
     plan.rs      pure planning over range collections (coalescing, `ReadPlan`)
     pread.rs     synchronous positioned-read reference backend
     range.rs     validated file-range value types

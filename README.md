@@ -22,6 +22,9 @@ exercise, not a production storage engine or a general-purpose async runtime.
 
 ## Planned `v0.1`
 
+This list is the full `v0.1` scope; the Status section above tracks which
+items already exist.
+
 - An explicit file-range schedule format.
 - Deterministic validation and coalescing of overlapping or adjacent ranges.
 - A synchronous `pread` reference backend.

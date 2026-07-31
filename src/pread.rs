@@ -77,6 +77,29 @@ pub enum ReadError {
         /// The range being read when the arithmetic overflowed.
         range: ReadRange,
     },
+    /// A positioned read reported more bytes than the unfilled remainder.
+    ///
+    /// [`FileExt::read_at`] can never report more bytes than the buffer it
+    /// was given, so this variant guards the exact-read loop against a broken
+    /// positioned-read implementation instead of describing a reachable
+    /// production input. Rejecting the over-report keeps a contract violation
+    /// from turning into silent success over unread bytes.
+    #[error(
+        "range [{}, {}): read at offset {offset} reported {reported} bytes for a \
+         {remaining}-byte remainder",
+        .range.offset(),
+        .range.end()
+    )]
+    OverreportedRead {
+        /// The range being read when the over-report happened.
+        range: ReadRange,
+        /// The absolute file offset of the over-reporting read.
+        offset: u64,
+        /// The byte count the read claimed to have filled.
+        reported: usize,
+        /// The unfilled byte count that was actually available.
+        remaining: usize,
+    },
     /// A read failed with an error that is not an interruption.
     #[error("range [{}, {}): read failed at offset {offset}", .range.offset(), .range.end())]
     Io {
@@ -138,8 +161,10 @@ impl RangeOutput {
 /// fit in `usize`, [`ReadError::BufferAllocation`] when a range buffer cannot
 /// be reserved, [`ReadError::UnexpectedEof`] when the file ends before a
 /// range is filled, [`ReadError::OffsetOverflow`] if the exact-read loop
-/// arithmetic would overflow, and [`ReadError::Io`] for every other I/O
-/// failure, preserving the original [`io::Error`] as its source.
+/// arithmetic would overflow, [`ReadError::OverreportedRead`] if a read
+/// reports more bytes than the unfilled remainder, and [`ReadError::Io`] for
+/// every other I/O failure, preserving the original [`io::Error`] as its
+/// source.
 ///
 /// # Examples
 ///
@@ -182,9 +207,12 @@ pub fn read_plan(file: &File, plan: &ReadPlan) -> Result<Vec<RangeOutput>, ReadE
 /// `read_at` must follow [`FileExt::read_at`] semantics: it reads into the
 /// given buffer at the given absolute file offset, returns the number of
 /// bytes read with `0` meaning end of file, never reports more bytes than the
-/// buffer holds, and moves no cursor. Production passes a closure over a
-/// borrowed [`File`]; tests pass scripted closures to exercise short reads,
-/// interruption, EOF, and failures deterministically.
+/// buffer holds, and moves no cursor. A callback that reports more bytes than
+/// the unfilled remainder is rejected with
+/// [`ReadError::OverreportedRead`] rather than trusted, so a broken reader can
+/// never turn into silent success over unread bytes. Production passes a
+/// closure over a borrowed [`File`]; tests pass scripted closures to exercise
+/// short reads, interruption, EOF, and failures deterministically.
 ///
 /// Every call receives only the unfilled remainder of the buffer and the
 /// matching absolute offset, so a short read is completed without touching
@@ -207,7 +235,10 @@ where
     let mut offset = range.offset();
 
     while filled < length {
-        match read_at(&mut bytes[filled..], offset) {
+        let unfilled = &mut bytes[filled..];
+        let remaining = unfilled.len();
+
+        match read_at(unfilled, offset) {
             Ok(0) => {
                 let actual =
                     u64::try_from(filled).map_err(|_source| ReadError::OffsetOverflow { range })?;
@@ -219,6 +250,15 @@ where
                 });
             }
             Ok(count) => {
+                if count > remaining {
+                    return Err(ReadError::OverreportedRead {
+                        range,
+                        offset,
+                        reported: count,
+                        remaining,
+                    });
+                }
+
                 offset = u64::try_from(count)
                     .ok()
                     .and_then(|advance| offset.checked_add(advance))
@@ -404,8 +444,24 @@ mod tests {
         assert!(matches!(
             error,
             ReadError::UnexpectedEof {
+                range: failed,
                 expected: 4,
                 actual: 2,
+            } if failed == range(10, 4)
+        ));
+    }
+
+    #[test]
+    fn read_range_exact_rejects_an_overreported_count() {
+        let error = read_range_exact(|buffer, _offset| Ok(buffer.len() + 1), range(10, 4))
+            .expect_err("an over-reported read must not become silent success");
+
+        assert!(matches!(
+            error,
+            ReadError::OverreportedRead {
+                offset: 10,
+                reported: 5,
+                remaining: 4,
                 ..
             }
         ));
