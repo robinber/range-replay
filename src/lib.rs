@@ -1,6 +1,10 @@
 //! Educational library for planning and executing file-range read schedules.
 //!
 //! Modules will grow here as the project takes shape. Keep the binary thin.
+#![expect(
+    unused_crate_dependencies,
+    reason = "`clap` is used by the binary target of this single-package application"
+)]
 
 mod plan;
 mod pread;
