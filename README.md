@@ -12,10 +12,47 @@ file-range read schedules on Linux.
 **Early implementation.** The validated `ReadRange` value type, deterministic
 coalescing of overlapping or adjacent ranges, the textual `offset,length`
 schedule format parsed by `parse_schedule`, the validated `ReadPlan` boundary
-type owning the canonical coalesced ranges, and the synchronous positioned-read
-(`pread`) reference backend executing a `ReadPlan` against an open file exist.
-No CLI behavior, checksums, in-flight byte budgeting, or `io_uring` backend
-does yet.
+type owning the canonical coalesced ranges, the synchronous positioned-read
+(`pread`) reference backend executing a `ReadPlan` against an open file, and a
+minimal synchronous command line exposing that pipeline exist. No checksums,
+in-flight byte budgeting, backend selection, or `io_uring` backend does yet.
+
+## Usage
+
+```text
+range-replay <DATA_FILE> <SCHEDULE_FILE>
+```
+
+The schedule file is UTF-8 text with one `offset,length` line per requested
+range. The schedule is parsed, coalesced into the canonical plan, and executed
+against the data file with the synchronous `pread` backend. On success, stdout
+holds exactly one line per canonical range, ordered by ascending offset:
+
+```text
+offset,length,hex
+```
+
+`hex` is the complete range payload, each byte rendered as exactly two
+lowercase, zero-padded hexadecimal characters; payload bytes are never
+interpreted as text. For a data file containing `0123456789abcdef` and a
+schedule containing:
+
+```text
+10,4
+2,3
+```
+
+the exact output is:
+
+```text
+2,3,323334
+10,4,61626364
+```
+
+Any failure — an unreadable or invalid schedule, an empty plan, an unopenable
+data file, or a backend error such as reading past end of file — is reported
+on stderr with its full cause chain and a non-zero exit status, and stdout
+stays empty: no partial output is ever rendered for a failed run.
 
 The project is deliberately bounded. It is a Rust and Linux systems-learning
 exercise, not a production storage engine or a general-purpose async runtime.
@@ -28,6 +65,7 @@ items already exist.
 - An explicit file-range schedule format.
 - Deterministic validation and coalescing of overlapping or adjacent ranges.
 - A synchronous `pread` reference backend.
+- A minimal synchronous command line exposing the pipeline.
 - An `io_uring` backend with a strict in-flight byte budget.
 - Typed errors for invalid ranges, overflow, EOF, partial reads, and I/O
   failures.
