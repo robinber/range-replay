@@ -23,7 +23,7 @@ use thiserror::Error;
 /// Replays a textual read schedule against a data file and prints each
 /// canonical range as `offset,length,hex`.
 #[derive(Debug, Parser)]
-#[command(version, about)]
+#[command(version)]
 struct CliArgs {
     /// File whose bytes the schedule reads.
     data_file: PathBuf,

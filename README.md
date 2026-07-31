@@ -65,6 +65,7 @@ items already exist.
 - An explicit file-range schedule format.
 - Deterministic validation and coalescing of overlapping or adjacent ranges.
 - A synchronous `pread` reference backend.
+- A minimal synchronous command line exposing the pipeline.
 - An `io_uring` backend with a strict in-flight byte budget.
 - Typed errors for invalid ranges, overflow, EOF, partial reads, and I/O
   failures.

@@ -140,6 +140,18 @@ fn arbitrary_binary_bytes_render_as_exact_lowercase_hex() {
 }
 
 #[test]
+fn overlapping_and_adjacent_ranges_render_one_coalesced_line() {
+    let data = Fixture::new("coalesce", "data", DATA);
+    let schedule = Fixture::new("coalesce", "schedule", b"2,2\n0,2\n1,1\n");
+
+    let output = run_on(&data.path, &schedule.path);
+
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"0,4,30313233\n");
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
 fn an_invalid_schedule_fails_with_empty_stdout_and_line_context() {
     let data = Fixture::new("invalid-schedule", "data", DATA);
     let schedule = Fixture::new("invalid-schedule", "schedule", b"10,4\nabc,5\n");
@@ -152,6 +164,7 @@ fn an_invalid_schedule_fails_with_empty_stdout_and_line_context() {
     assert!(stderr.contains(&schedule.path.display().to_string()));
     assert!(stderr.contains("line 2"));
     assert!(stderr.contains("invalid offset"));
+    assert!(stderr.contains("invalid digit found in string"));
 }
 
 #[test]
