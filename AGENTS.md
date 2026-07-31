@@ -31,8 +31,9 @@ silently choose the interpretation that permits more work.
 
   ```text
   src/
-    lib.rs       library surface (planning, validation, backends later)
-    plan.rs      pure planning over range collections (coalescing)
+    lib.rs       library surface (planning, validation, backends)
+    plan.rs      pure planning over range collections (coalescing, `ReadPlan`)
+    pread.rs     synchronous positioned-read reference backend
     range.rs     validated file-range value types
     schedule.rs  textual schedule parsing (`offset,length` lines)
     main.rs      thin binary entrypoint
