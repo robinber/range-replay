@@ -11,9 +11,11 @@ file-range read schedules on Linux.
 
 **Early implementation.** The validated `ReadRange` value type, deterministic
 coalescing of overlapping or adjacent ranges, the textual `offset,length`
-schedule format parsed by `parse_schedule`, and the validated `ReadPlan`
-boundary type owning the canonical coalesced ranges exist. No file loading,
-backend, or CLI behavior does yet.
+schedule format parsed by `parse_schedule`, the validated `ReadPlan` boundary
+type owning the canonical coalesced ranges, and the synchronous positioned-read
+(`pread`) reference backend executing a `ReadPlan` against an open file exist.
+No CLI behavior, checksums, in-flight byte budgeting, or `io_uring` backend
+does yet.
 
 The project is deliberately bounded. It is a Rust and Linux systems-learning
 exercise, not a production storage engine or a general-purpose async runtime.

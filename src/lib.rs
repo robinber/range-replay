@@ -3,9 +3,11 @@
 //! Modules will grow here as the project takes shape. Keep the binary thin.
 
 mod plan;
+mod pread;
 mod range;
 mod schedule;
 
 pub use crate::plan::{PlanError, ReadPlan, coalesce};
+pub use crate::pread::{RangeOutput, ReadError, read_plan};
 pub use crate::range::{RangeError, ReadRange};
 pub use crate::schedule::{ScheduleError, parse_schedule};
