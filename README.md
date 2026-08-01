@@ -20,9 +20,11 @@ library-only: the CLI neither renders nor compares checksums), and validated
 budget configuration with compact deterministic physical planning
 (`ByteBudget` and the derived `ExecutionPlan`, which stores one planned entry
 per logical range and computes each physical read on demand instead of
-materializing them; library-only: the CLI takes no budget) exist. No dynamic
-in-flight byte enforcement, scheduling, backend selection, or `io_uring`
-backend does yet.
+materializing them; library-only: the CLI takes no budget), and a
+single-threaded `BudgetLimiter` enforcing the in-flight byte budget through
+uniquely owned RAII `Reservation` guards (the accounting primitive only: no
+scheduler or backend acquires reservations yet) exist. No scheduling, backend
+selection, or `io_uring` backend does yet.
 
 ## Usage
 

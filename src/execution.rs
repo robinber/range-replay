@@ -25,24 +25,18 @@
 //! scheduler can request reads incrementally without reconstructing or
 //! re-validating the plan.
 //!
-//! This module is planning only. Nothing here reads a file, tracks bytes
-//! actually in flight, releases budget on completion, or schedules work;
-//! those remain later slices.
+//! This module is planning only. Nothing here reads a file or schedules
+//! work; tracking and releasing the bytes actually in flight belongs to
+//! [`BudgetLimiter`](crate::BudgetLimiter), and scheduling remains a later
+//! slice.
 
 use std::collections::TryReserveError;
 
 use thiserror::Error;
 
+use crate::budget::ByteBudget;
 use crate::plan::ReadPlan;
 use crate::range::ReadRange;
-
-/// Reason a [`ByteBudget`] could not be constructed.
-#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
-pub enum BudgetError {
-    /// The requested budget was `0`, so no non-empty read could ever fit.
-    #[error("byte budget must be greater than zero")]
-    ZeroBudget,
-}
 
 /// Reason an [`ExecutionPlan`] could not be derived or a physical read could
 /// not be generated.
@@ -100,58 +94,6 @@ pub enum ExecutionPlanError {
         /// Byte budget the read had to respect.
         budget: u64,
     },
-}
-
-/// A validated, non-zero limit on the size of one physical read.
-///
-/// A budget of `0` is rejected at construction rather than treated as
-/// temporary backpressure: no non-empty read could ever fit under it, so a
-/// zero budget can never admit any work and is an invalid configuration
-/// instead of a momentarily full one.
-///
-/// `ByteBudget` is [`Copy`] because it is immutable configuration: copying a
-/// limit cannot multiply any capacity. A future runtime *reservation* guard
-/// is the opposite — it will represent exclusive ownership of admitted
-/// in-flight bytes and must stay uniquely owned rather than copyable.
-///
-/// This slice uses the budget for static planning only; enforcing the sum of
-/// bytes actually in flight is a later slice.
-///
-/// # Examples
-///
-/// ```
-/// use range_replay::{BudgetError, ByteBudget};
-///
-/// let budget = ByteBudget::try_new(8)?;
-/// assert_eq!(budget.bytes(), 8);
-///
-/// assert_eq!(ByteBudget::try_new(0), Err(BudgetError::ZeroBudget));
-/// # Ok::<(), BudgetError>(())
-/// ```
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ByteBudget {
-    bytes: u64,
-}
-
-impl ByteBudget {
-    /// Creates a budget allowing physical reads of up to `bytes` bytes.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`BudgetError::ZeroBudget`] when `bytes` is `0`.
-    pub const fn try_new(bytes: u64) -> Result<Self, BudgetError> {
-        if bytes == 0 {
-            return Err(BudgetError::ZeroBudget);
-        }
-
-        Ok(Self { bytes })
-    }
-
-    /// Returns the byte limit, which is always at least `1`.
-    #[must_use]
-    pub const fn bytes(&self) -> u64 {
-        self.bytes
-    }
 }
 
 /// One logical range grouped with the physical reads that cover it.
@@ -359,7 +301,7 @@ impl ExecutionPlan {
 
 #[cfg(test)]
 mod tests {
-    use super::{BudgetError, ByteBudget, ExecutionPlan, PlannedRange};
+    use super::{ByteBudget, ExecutionPlan, PlannedRange};
     use crate::plan::ReadPlan;
     use crate::range::ReadRange;
 
@@ -386,17 +328,6 @@ mod tests {
         planned
             .physical_read(operation_index)
             .expect("test lookups stay within the generation contract")
-    }
-
-    #[test]
-    fn byte_budget_rejects_zero() {
-        assert_eq!(ByteBudget::try_new(0), Err(BudgetError::ZeroBudget));
-    }
-
-    #[test]
-    fn byte_budget_preserves_its_exact_value() {
-        assert_eq!(budget(8).bytes(), 8);
-        assert_eq!(budget(u64::MAX).bytes(), u64::MAX);
     }
 
     #[test]
