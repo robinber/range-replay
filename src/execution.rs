@@ -137,10 +137,10 @@ impl ByteBudget {
 
 /// One logical range grouped with the physical reads that cover it.
 ///
-/// Values only exist inside an [`ExecutionPlan`]; no public constructor
-/// accepts arbitrary reads, so the association between a logical range and
-/// its covering physical reads can be neither forged nor broken after
-/// construction.
+/// Values can only be constructed during [`ExecutionPlan`] derivation; no
+/// public constructor accepts arbitrary reads, so the association between a
+/// logical range and its covering physical reads can be neither forged nor
+/// broken after construction.
 ///
 /// The grouping is the reconstruction contract for later slices: the bytes of
 /// the logical range are exactly the bytes of its physical reads, in order.
@@ -162,9 +162,9 @@ impl PlannedRange {
 
     /// Returns the physical reads covering the logical range exactly once.
     ///
-    /// The slice is never empty; every read has a length in
-    /// `1..=budget.bytes()`, and every read except a possible final tail has
-    /// exactly the budget's length.
+    /// The slice is never empty; every read has a length between `1` and the
+    /// byte budget of the parent [`ExecutionPlan`], and every read except a
+    /// possible final tail has exactly that budget's length.
     #[must_use]
     pub fn physical_reads(&self) -> &[ReadRange] {
         &self.physical_reads
