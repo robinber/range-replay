@@ -32,8 +32,9 @@ silently choose the interpretation that permits more work.
   ```text
   src/
     lib.rs       library surface (planning, validation, backends)
+    budget.rs    byte budget and runtime accounting (`ByteBudget`, `BudgetLimiter`)
     checksum.rs  deterministic per-range SHA-256 checksums
-    execution.rs budget-derived physical planning (`ByteBudget`, `ExecutionPlan`)
+    execution.rs budget-derived physical planning (`ExecutionPlan`)
     plan.rs      pure planning over range collections (coalescing, `ReadPlan`)
     pread.rs     synchronous positioned-read reference backend
     range.rs     validated file-range value types
