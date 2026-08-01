@@ -192,10 +192,15 @@ impl BudgetLimiter {
     #[must_use]
     pub fn available_bytes(&self) -> u64 {
         // `try_reserve` never admits beyond the limit and every release
-        // subtracts checked, so the in-flight bytes never exceed the limit;
-        // saturation is unreachable and only keeps this accessor free of a
-        // panic path.
-        self.limit.bytes().saturating_sub(self.in_flight.get())
+        // subtracts checked, so the in-flight bytes never exceed the limit
+        // and the subtraction cannot fail. A hypothetically corrupt state
+        // fails closed through the explicit branch: it reports zero
+        // available instead of silently saturating or wrapping.
+        let Some(available) = self.limit.bytes().checked_sub(self.in_flight.get()) else {
+            return 0;
+        };
+
+        available
     }
 
     /// Attempts to admit `range` under the budget without waiting.
@@ -222,18 +227,26 @@ impl BudgetLimiter {
             return Err(ReservationError::ExceedsBudget { requested, limit });
         }
 
-        if requested > self.available_bytes() {
+        let in_flight = self.in_flight.get();
+        let Some(available) = limit.checked_sub(in_flight) else {
+            // Unreachable: no admission path lets the in-flight bytes
+            // exceed the limit. Fail closed by admitting nothing and
+            // mutating nothing.
+            return Ok(None);
+        };
+
+        if requested > available {
             return Ok(None);
         }
 
-        let Some(in_flight) = self.in_flight.get().checked_add(requested) else {
+        let Some(updated) = in_flight.checked_add(requested) else {
             // Unreachable: `requested` fits in `limit - in_flight`, so the
             // sum stays at or under the limit. Fail closed by admitting
             // nothing instead of wrapping the accounting.
             return Ok(None);
         };
 
-        self.in_flight.set(in_flight);
+        self.in_flight.set(updated);
 
         Ok(Some(Reservation {
             range,
