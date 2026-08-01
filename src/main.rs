@@ -7,6 +7,10 @@
 //! The rendering contract is fail-closed: nothing reaches stdout unless the
 //! whole plan executed successfully, so any domain output visible on stdout
 //! came from a completely successful run.
+#![expect(
+    unused_crate_dependencies,
+    reason = "`sha2` is used by the library target of this single-package application"
+)]
 
 use std::fs::{self, File};
 use std::io::{self, Write};
