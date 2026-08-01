@@ -14,10 +14,13 @@ coalescing of overlapping or adjacent ranges, the textual `offset,length`
 schedule format parsed by `parse_schedule`, the validated `ReadPlan` boundary
 type owning the canonical coalesced ranges, the synchronous positioned-read
 (`pread`) reference backend executing a `ReadPlan` against an open file, a
-minimal synchronous command line exposing that pipeline, and deterministic
+minimal synchronous command line exposing that pipeline, deterministic
 per-range SHA-256 checksums over completed range outputs (`checksum`,
-library-only: the CLI neither renders nor compares checksums) exist. No
-in-flight byte budgeting, backend selection, or `io_uring` backend does yet.
+library-only: the CLI neither renders nor compares checksums), and validated
+budget configuration with deterministic physical planning (`ByteBudget` and
+the derived `ExecutionPlan`, library-only: the CLI takes no budget) exist. No
+dynamic in-flight byte enforcement, scheduling, backend selection, or
+`io_uring` backend does yet.
 
 ## Usage
 
