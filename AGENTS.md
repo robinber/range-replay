@@ -32,6 +32,7 @@ silently choose the interpretation that permits more work.
   ```text
   src/
     lib.rs       library surface (planning, validation, backends)
+    checksum.rs  deterministic per-range SHA-256 checksums
     plan.rs      pure planning over range collections (coalescing, `ReadPlan`)
     pread.rs     synchronous positioned-read reference backend
     range.rs     validated file-range value types

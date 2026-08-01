@@ -13,8 +13,10 @@ file-range read schedules on Linux.
 coalescing of overlapping or adjacent ranges, the textual `offset,length`
 schedule format parsed by `parse_schedule`, the validated `ReadPlan` boundary
 type owning the canonical coalesced ranges, the synchronous positioned-read
-(`pread`) reference backend executing a `ReadPlan` against an open file, and a
-minimal synchronous command line exposing that pipeline exist. No checksums,
+(`pread`) reference backend executing a `ReadPlan` against an open file, a
+minimal synchronous command line exposing that pipeline, and deterministic
+per-range SHA-256 checksums over completed range outputs (`checksum`,
+library-only: the CLI neither renders nor compares checksums) exist. No
 in-flight byte budgeting, backend selection, or `io_uring` backend does yet.
 
 ## Usage

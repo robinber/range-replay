@@ -6,11 +6,13 @@
     reason = "`clap` is used by the binary target of this single-package application"
 )]
 
+mod checksum;
 mod plan;
 mod pread;
 mod range;
 mod schedule;
 
+pub use crate::checksum::{RangeChecksum, checksum};
 pub use crate::plan::{PlanError, ReadPlan, coalesce};
 pub use crate::pread::{RangeOutput, ReadError, read_plan};
 pub use crate::range::{RangeError, ReadRange};
