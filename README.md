@@ -17,10 +17,12 @@ type owning the canonical coalesced ranges, the synchronous positioned-read
 minimal synchronous command line exposing that pipeline, deterministic
 per-range SHA-256 checksums over completed range outputs (`checksum`,
 library-only: the CLI neither renders nor compares checksums), and validated
-budget configuration with deterministic physical planning (`ByteBudget` and
-the derived `ExecutionPlan`, library-only: the CLI takes no budget) exist. No
-dynamic in-flight byte enforcement, scheduling, backend selection, or
-`io_uring` backend does yet.
+budget configuration with compact deterministic physical planning
+(`ByteBudget` and the derived `ExecutionPlan`, which stores one planned entry
+per logical range and computes each physical read on demand instead of
+materializing them; library-only: the CLI takes no budget) exist. No dynamic
+in-flight byte enforcement, scheduling, backend selection, or `io_uring`
+backend does yet.
 
 ## Usage
 
