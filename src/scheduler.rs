@@ -123,6 +123,8 @@ pub enum SchedulerError {
 ///
 /// An identity is local to the plan it was scheduled from; two schedulers
 /// over different plans may return equal identities for unrelated reads.
+/// Only scheduling produces values — the type has no public constructor, so
+/// an identity cannot be forged for an operation that was never admitted.
 /// Because the scheduler may admit operations out of physical-offset order,
 /// this identity — not submission order — is what preserves each read's
 /// relationship to the plan.
@@ -210,7 +212,7 @@ impl ScheduledRead {
 /// of the plan, and admitted work distinct; permanent failures are the
 /// separate [`SchedulerError`].
 #[derive(Debug)]
-#[must_use = "a ready decision owns admitted budget bytes that dropping immediately releases"]
+#[must_use = "a ready decision owns admitted budget bytes; ignoring a decision may drop them without any work having run"]
 pub enum ScheduleDecision {
     /// One pending operation was greedily selected, reserved, removed from
     /// the pending set, and returned.
@@ -282,6 +284,18 @@ impl RangeProgress {
             })
         }
     }
+}
+
+/// Fallibly reserves the compact progress allocation for `capacity` logical
+/// ranges, so construction either completes or fails with a typed error
+/// before any entry is produced.
+fn try_reserve_progress(capacity: usize) -> Result<Vec<RangeProgress>, SchedulerError> {
+    let mut progress = Vec::new();
+    progress
+        .try_reserve_exact(capacity)
+        .map_err(|source| SchedulerError::StateReservationFailed { capacity, source })?;
+
+    Ok(progress)
 }
 
 /// Incremental greedy distribution of one [`ExecutionPlan`] under its own
@@ -378,21 +392,18 @@ impl Scheduler {
     /// # Errors
     ///
     /// Returns [`SchedulerError::StateReservationFailed`] when the
-    /// per-logical-range progress allocation cannot be reserved; the plan
-    /// is consumed but no partial scheduler is observable. The
+    /// per-logical-range progress allocation cannot be reserved. The
     /// [`SchedulerError::PhysicalReadFailed`] and
     /// [`SchedulerError::PhysicalReadMissing`] variants guard the probe of
     /// each range's final operation and cannot occur for a plan built from
-    /// validated inputs.
+    /// validated inputs. Every construction failure consumes the plan and
+    /// never yields a partial scheduler.
     pub fn try_new(plan: ExecutionPlan) -> Result<Self, SchedulerError> {
         let read_size = plan.config().read_size().bytes();
         let planned = plan.ranges();
         let capacity = planned.len();
 
-        let mut progress = Vec::new();
-        progress
-            .try_reserve_exact(capacity)
-            .map_err(|source| SchedulerError::StateReservationFailed { capacity, source })?;
+        let mut progress = try_reserve_progress(capacity)?;
 
         for (logical_range_index, planned_range) in planned.iter().enumerate() {
             progress.push(RangeProgress::try_from_planned(
@@ -544,7 +555,10 @@ impl Scheduler {
 
 #[cfg(test)]
 mod tests {
-    use super::{OperationId, ScheduleDecision, ScheduledRead, Scheduler};
+    use super::{
+        OperationId, ScheduleDecision, ScheduledRead, Scheduler, SchedulerError,
+        try_reserve_progress,
+    };
     use crate::budget::ByteBudget;
     use crate::execution::{ExecutionConfig, ExecutionPlan, ReadSize};
     use crate::plan::ReadPlan;
@@ -735,17 +749,26 @@ mod tests {
     }
 
     #[test]
-    fn the_greatest_fitting_tail_wins() {
-        let mut scheduler = scheduler(&[span(0, 7), span(10, 12)], 4, 7);
+    fn the_greatest_fitting_tail_wins_over_an_earlier_smaller_tail() {
+        let mut scheduler = scheduler(&[span(0, 2), span(10, 17)], 4, 7);
 
         let full = ready(&mut scheduler);
-        assert_eq!(full.id(), op(0, 0));
+        assert_eq!(full.id(), op(1, 0));
+        assert_eq!(full.range(), span(10, 14));
         assert_eq!(counters(&scheduler), (4, 3));
 
         let greatest = ready(&mut scheduler);
-        assert_eq!(greatest.id(), op(0, 1));
-        assert_eq!(greatest.range(), span(4, 7));
+        assert_eq!(greatest.id(), op(1, 1));
+        assert_eq!(greatest.range(), span(14, 17));
         assert_eq!(counters(&scheduler), (7, 0));
+
+        assert_waiting(&mut scheduler);
+
+        drop(full);
+        let smaller = ready(&mut scheduler);
+        assert_eq!(smaller.id(), op(0, 0));
+        assert_eq!(smaller.range(), span(0, 2));
+        assert_exhausted(&mut scheduler);
     }
 
     #[test]
@@ -881,6 +904,16 @@ mod tests {
         assert_exhausted(&mut scheduler);
         drop(widest);
         assert_eq!(counters(&scheduler), (0, u64::MAX));
+    }
+
+    #[test]
+    fn an_unreservable_progress_capacity_is_a_typed_error() {
+        match try_reserve_progress(usize::MAX) {
+            Err(SchedulerError::StateReservationFailed { capacity, .. }) => {
+                assert_eq!(capacity, usize::MAX);
+            }
+            other => panic!("expected a typed reservation failure, got {other:?}"),
+        }
     }
 
     #[test]

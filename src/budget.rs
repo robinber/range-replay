@@ -23,7 +23,8 @@
 //! this API.
 //!
 //! This module is accounting only. Nothing here reads a file, allocates
-//! buffers, schedules work, waits, or queues; those remain later slices.
+//! buffers, schedules work, waits, or queues; scheduling belongs to
+//! [`Scheduler`](crate::Scheduler), and execution remains a later slice.
 
 use std::cell::Cell;
 use std::rc::Rc;

@@ -40,7 +40,7 @@ silently choose the interpretation that permits more work.
     range.rs     validated file-range value types
     schedule.rs  textual schedule parsing (`offset,length` lines)
     scheduler.rs budget-aware greedy selection of pending physical reads
-                 (`Scheduler`, `ScheduledRead`, `OperationId`)
+                 (`Scheduler`, `ScheduledRead`, `ScheduleDecision`, `OperationId`)
     main.rs      thin binary entrypoint
   ```
 
