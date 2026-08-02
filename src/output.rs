@@ -631,7 +631,7 @@ impl OutputAssembler {
     /// output is exposed and consuming the assembler drops every private
     /// buffer. On success each final buffer is moved — never recopied —
     /// into its output, reusing the capacity reserved during construction
-    /// so no new allocation happens here.
+    /// so nothing is allocated beyond it.
     ///
     /// # Errors
     ///
