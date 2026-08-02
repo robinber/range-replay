@@ -34,7 +34,11 @@
 //! rejected by the expected/actual range comparison, but two independent
 //! runs built from byte-for-byte identical plans are indistinguishable
 //! here; cross-run provenance is future executor/session work and is
-//! deliberately not claimed.
+//! deliberately not claimed. The compact `remaining_bytes` counter guards
+//! its own arithmetic only: a cross-run duplicate that still fits the
+//! remaining count double-counts progress undetected, which is why the
+//! same-run pairing requirement is a hard precondition rather than an
+//! enforced property.
 //!
 //! Finalization is fail-closed: no [`RangeOutput`] is observable until every
 //! logical range is complete, and a successful [`OutputAssembler::finish`]
@@ -184,6 +188,12 @@ pub enum AssemblyError {
     /// byte-for-byte identical plan are indistinguishable and can reach
     /// this guard. The counter is rejected instead of wrapped or
     /// saturated, and no logical byte changes.
+    ///
+    /// The guard protects the counter arithmetic, not completion
+    /// identity: a cross-run duplicate whose length still fits the
+    /// remaining count is *not* detected — it double-counts progress
+    /// toward completion. Same-run pairing is a hard precondition, not a
+    /// property this error enforces.
     #[error(
         "{id}: recording {length} bytes would underflow the {remaining} bytes remaining for \
          logical range [{}, {})",
@@ -390,7 +400,10 @@ fn destination_span(
 /// structurally excluded — the scheduler returns each operation once and
 /// one completion consumes it — while completions from an independent run
 /// over a byte-for-byte identical plan cannot be distinguished; cross-run
-/// provenance is future executor work and is not claimed here.
+/// provenance is future executor work and is not claimed here. Violating
+/// the pairing precondition can silently corrupt assembly: a duplicate
+/// whose length still fits the remaining count double-counts progress and
+/// can complete a range whose other bytes were never recorded.
 ///
 /// [`Self::is_complete`] and a successful [`Self::finish`] mean only that
 /// every logical byte was integrated. Neither implies the scheduler is

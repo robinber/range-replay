@@ -55,7 +55,9 @@ exposes `RangeOutput` values only after every logical byte was recorded —
 finalization moves buffers into plan-order outputs without recopying.
 Completions must come from the scheduler run paired with the prepared
 plan; two independent runs over byte-for-byte identical plans are not
-distinguished (cross-run provenance is future executor work). All of this
+distinguished, and a duplicate from such a run that still fits the
+remaining count double-counts progress undetected (cross-run provenance
+is future executor work). All of this
 stays library-only — the CLI invocation and output are unchanged. No
 executor loop drives schedule/submit/complete/drain, and no backend
 selection or `io_uring` backend exists yet.
