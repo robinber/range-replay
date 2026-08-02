@@ -39,7 +39,8 @@
 //! Finalization is fail-closed: no [`RangeOutput`] is observable until every
 //! logical range is complete, and a successful [`OutputAssembler::finish`]
 //! moves each buffer into its output in plan order without recopying payload
-//! bytes or allocating. [`OutputAssembler::is_complete`] means only that
+//! bytes and without allocating beyond the capacity reserved at
+//! construction. [`OutputAssembler::is_complete`] means only that
 //! every logical byte was integrated — it is not global execution success,
 //! which only a future executor loop over scheduler and backend could
 //! decide. No such executor exists yet, and nothing here schedules work,
@@ -73,7 +74,7 @@ pub enum AssemblyError {
     /// already-materialized plan, and are reserved fallibly before any
     /// logical buffer exists, so an assembler is either built completely or
     /// fails with this variant instead of aborting mid-way.
-    #[error("cannot reserve assembler state for {capacity} logical ranges")]
+    #[error("cannot reserve assembler state or output capacity for {capacity} logical ranges")]
     StateReservationFailed {
         /// Number of logical ranges whose state reservation failed.
         capacity: usize,
@@ -329,6 +330,18 @@ fn try_reserve_state(capacity: usize) -> Result<Vec<RangeEntry>, AssemblyError> 
     Ok(entries)
 }
 
+/// Fallibly reserves the finalization output capacity for `capacity` logical
+/// ranges, so a successful [`OutputAssembler::finish`] performs no new
+/// allocation.
+fn try_reserve_outputs(capacity: usize) -> Result<Vec<RangeOutput>, AssemblyError> {
+    let mut outputs = Vec::new();
+    outputs
+        .try_reserve_exact(capacity)
+        .map_err(|source| AssemblyError::StateReservationFailed { capacity, source })?;
+
+    Ok(outputs)
+}
+
 /// Computes the destination byte span of one expected physical range inside
 /// its logical buffer.
 ///
@@ -480,11 +493,7 @@ impl OutputAssembler {
         let capacity = planned_ranges.len();
 
         let mut entries = try_reserve_state(capacity)?;
-
-        let mut outputs = Vec::new();
-        outputs
-            .try_reserve_exact(capacity)
-            .map_err(|source| AssemblyError::StateReservationFailed { capacity, source })?;
+        let outputs = try_reserve_outputs(capacity)?;
 
         for planned in planned_ranges {
             let logical = planned.logical_range();
@@ -665,7 +674,9 @@ mod tests {
     use std::path::PathBuf;
     use std::{env, fs, process};
 
-    use super::{AssemblyError, OutputAssembler, destination_span, try_reserve_state};
+    use super::{
+        AssemblyError, OutputAssembler, destination_span, try_reserve_outputs, try_reserve_state,
+    };
     use crate::budget::ByteBudget;
     use crate::completion::CompletedRead;
     use crate::execution::{ExecutionConfig, ExecutionPlan, ReadSize};
@@ -727,21 +738,31 @@ mod tests {
     }
 
     #[test]
-    fn construction_prepares_every_range_and_starts_incomplete() {
-        let plan = execution(&[span(0, 4), span(10, 16)], 4, 8);
-        let assembler = assembler_for(&plan);
+    fn construction_prepares_state_for_every_range_and_starts_incomplete() {
+        let plan = execution(&[span(0, 4), span(10, 16)], 4, 10);
+        let mut assembler = assembler_for(&plan);
+        let mut scheduler = scheduler_for(plan);
 
+        assert!(!assembler.is_complete());
+
+        // Completing the first range proves the second range owns its own
+        // prepared state: finalization reports it with its exact full
+        // length, so its buffer and counter were prepared at construction.
+        let first = completed(&mut scheduler, b"abcd");
+        assembler
+            .record(first)
+            .expect("the paired completion matches");
         assert!(!assembler.is_complete());
 
         let error = assembler
             .finish()
-            .expect_err("nothing was recorded, so finalization must fail closed");
+            .expect_err("the second logical range was never recorded");
         assert!(matches!(
             error,
             AssemblyError::Incomplete {
                 range,
-                remaining: 4,
-            } if range == span(0, 4)
+                remaining: 6,
+            } if range == span(10, 16)
         ));
     }
 
@@ -822,9 +843,10 @@ mod tests {
         }
         assert!(assembler.is_complete());
 
-        // Finalization moves each prepared buffer into its output — plan
-        // order, no payload recopy, and no allocation beyond the capacity
-        // reserved at construction.
+        // Plan order is asserted below. The no-recopy and no-new-allocation
+        // properties of finalization are structural — buffers are moved and
+        // the output capacity was reserved at construction — and are not
+        // proven by this test.
         let outputs = assembler.finish().expect("every logical byte was recorded");
         assert_eq!(outputs.len(), 2);
         assert_eq!(outputs[0].range(), span(10, 16));
@@ -1093,34 +1115,67 @@ mod tests {
     }
 
     #[test]
-    fn per_range_state_stays_proportional_for_a_large_operation_count() {
-        const LENGTH: u64 = 1 << 24;
+    fn per_range_state_stays_proportional_without_materializing_the_payload() {
+        const TEBIBYTE: u64 = 1 << 40;
 
-        // 16,777,216 physical operations at read size 1. Preparation must
-        // allocate only the one logical buffer plus constant metadata —
-        // never any per-operation entry — so this constructs instantly.
-        let plan = execution(&[span(0, LENGTH)], 1, 1);
-        assert_eq!(plan.ranges()[0].operation_count(), LENGTH);
+        // The compact plan alone represents 2^28 physical operations.
+        // Preparing outputs for it would have to allocate the full tebibyte
+        // logical payload, so the huge probe stays plan-only, exactly like
+        // the execution and scheduler compactness tests.
+        let huge = execution(&[span(0, TEBIBYTE)], 4096, 65536);
+        assert_eq!(huge.ranges()[0].operation_count(), 268_435_456);
 
-        let assembler = assembler_for(&plan);
-        assert!(!assembler.is_complete());
+        // Assembler state is per logical range — planned metadata, one
+        // exact buffer, one counter — never per physical operation: at read
+        // size 1 every byte is its own operation, and recording all of them
+        // works through the same two compact entries.
+        let plan = execution(&[span(0, 16), span(100, 116)], 1, 32);
+        let mut assembler = assembler_for(&plan);
+        let mut scheduler = scheduler_for(plan);
 
-        let error = assembler
-            .finish()
-            .expect_err("nothing was recorded, so finalization must fail closed");
-        assert!(matches!(
-            error,
-            AssemblyError::Incomplete {
-                remaining: LENGTH,
-                ..
+        let mut completions = Vec::new();
+        loop {
+            match scheduler
+                .schedule_next()
+                .expect("test scheduling decisions succeed")
+            {
+                ScheduleDecision::Ready(read) => {
+                    let value =
+                        u8::try_from(read.range().offset()).expect("test offsets fit in one byte");
+                    completions.push(
+                        CompletedRead::try_new(vec![value], read)
+                            .expect("test bytes cover the admitted range exactly"),
+                    );
+                }
+                ScheduleDecision::WaitingForBudget => {
+                    panic!("a 32-byte budget admits every single-byte read")
+                }
+                ScheduleDecision::Exhausted => break,
             }
-        ));
+        }
+        assert_eq!(completions.len(), 32);
+
+        for completion in completions {
+            assembler
+                .record(completion)
+                .expect("every completion matches its expected range");
+        }
+        assert!(assembler.is_complete());
+
+        let outputs = assembler.finish().expect("every logical byte was recorded");
+        let expected_first: Vec<u8> = (0..16).collect();
+        let expected_second: Vec<u8> = (100..116).collect();
+        assert_eq!(outputs[0].bytes(), expected_first.as_slice());
+        assert_eq!(outputs[1].bytes(), expected_second.as_slice());
     }
 
     #[test]
     fn an_unallocatable_logical_buffer_is_a_typed_error_before_any_io() {
         // On 64-bit targets `u64::MAX` converts to `usize`, so the fallible
-        // buffer reservation is what must reject the request.
+        // buffer reservation is what must reject the request. The
+        // `AssemblyError::UnrepresentableLength` variant is therefore
+        // platform-conditional: it guards 32-bit targets and stays
+        // uncovered on 64-bit hosts.
         let plan = execution(&[span(0, u64::MAX)], u64::MAX, u64::MAX);
 
         let error = OutputAssembler::try_new(&plan)
@@ -1134,6 +1189,16 @@ mod tests {
     #[test]
     fn an_unreservable_state_capacity_is_a_typed_error() {
         match try_reserve_state(usize::MAX) {
+            Err(AssemblyError::StateReservationFailed { capacity, .. }) => {
+                assert_eq!(capacity, usize::MAX);
+            }
+            other => panic!("expected a typed reservation failure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_unreservable_output_capacity_is_a_typed_error() {
+        match try_reserve_outputs(usize::MAX) {
             Err(AssemblyError::StateReservationFailed { capacity, .. }) => {
                 assert_eq!(capacity, usize::MAX);
             }
