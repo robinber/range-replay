@@ -23,7 +23,8 @@
 //! this API.
 //!
 //! This module is accounting only. Nothing here reads a file, allocates
-//! buffers, schedules work, waits, or queues; those remain later slices.
+//! buffers, schedules work, waits, or queues; scheduling belongs to
+//! [`Scheduler`](crate::Scheduler), and execution remains a later slice.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -72,9 +73,10 @@ pub enum ReservationError {
 /// uniquely owned rather than copyable.
 ///
 /// Runtime enforcement exists as a primitive: a [`BudgetLimiter`] tracks the
-/// sum of bytes actually in flight and never admits beyond the limit. No
-/// scheduler or backend acquires reservations yet; that remains a later
-/// slice.
+/// sum of bytes actually in flight and never admits beyond the limit. A
+/// [`Scheduler`](crate::Scheduler) acquires reservations for greedily
+/// selected physical reads through its own internal limiter; no executor or
+/// backend consumes them yet.
 ///
 /// # Examples
 ///
@@ -278,8 +280,9 @@ impl BudgetLimiter {
 /// limit cannot be exceeded.
 ///
 /// The guard carries no logical-range identity, operation index, buffer, or
-/// backend state; a future scheduler pairs those concerns with it. It
-/// reserves the actual physical range length only.
+/// backend state; a [`ScheduledRead`](crate::ScheduledRead) pairs a stable
+/// operation identity with it. It reserves the actual physical range length
+/// only.
 #[derive(Debug)]
 #[must_use = "dropping a reservation immediately releases its admitted bytes"]
 pub struct Reservation {

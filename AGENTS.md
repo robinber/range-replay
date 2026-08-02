@@ -39,6 +39,8 @@ silently choose the interpretation that permits more work.
     pread.rs     synchronous positioned-read reference backend
     range.rs     validated file-range value types
     schedule.rs  textual schedule parsing (`offset,length` lines)
+    scheduler.rs budget-aware greedy selection of pending physical reads
+                 (`Scheduler`, `ScheduledRead`, `ScheduleDecision`, `OperationId`)
     main.rs      thin binary entrypoint
   ```
 
