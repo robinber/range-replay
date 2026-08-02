@@ -35,14 +35,15 @@
 //! logical range — the range, the read size, and the exact operation count —
 //! and never materializes a collection of physical reads. Construction is
 //! proportional to the number of logical ranges, while each physical read is
-//! computed on demand through [`PlannedRange::physical_read`], so a later
-//! scheduler can request reads incrementally without reconstructing or
-//! re-validating the plan.
+//! computed on demand through [`PlannedRange::physical_read`], so the
+//! [`Scheduler`](crate::Scheduler) can request reads incrementally without
+//! reconstructing or re-validating the plan.
 //!
 //! This module is planning only. Nothing here reads a file or schedules
 //! work; tracking and releasing the bytes actually in flight belongs to
-//! [`BudgetLimiter`](crate::BudgetLimiter), and no scheduler or backend
-//! submits reads yet.
+//! [`BudgetLimiter`](crate::BudgetLimiter), a
+//! [`Scheduler`](crate::Scheduler) selects and admits planned reads under
+//! the budget, and no executor or backend submits reads yet.
 
 use std::collections::TryReserveError;
 
@@ -152,7 +153,8 @@ impl ReadSize {
 /// several planned reads lets them be in flight simultaneously without
 /// requiring several threads — admission is accounting, not parallel
 /// execution, and a merely valid configuration promises only that one full
-/// read fits. No scheduler or backend submits reads yet.
+/// read fits. A [`Scheduler`](crate::Scheduler) admits planned reads under
+/// the budget; no executor or backend submits them yet.
 ///
 /// An invalid pairing is unrepresentable: `try_new` rejects a read size
 /// larger than the budget with the exact offending values instead of

@@ -23,12 +23,19 @@ flight, `ExecutionConfig` validates `read_size <= byte_budget` by
 construction, and the derived `ExecutionPlan` splits with the read size only,
 stores one planned entry per logical range, and computes each physical read
 on demand instead of materializing them; library-only: the CLI takes no
-configuration arguments), and a single-threaded `BudgetLimiter` enforcing the
+configuration arguments), a single-threaded `BudgetLimiter` enforcing the
 in-flight byte budget through uniquely owned RAII `Reservation` guards (the
-accounting primitive only: several planned reads can be admitted together
-when the budget can hold their combined lengths, but no scheduler or backend
-acquires reservations or submits reads yet) exist. No scheduling, backend
-selection, or `io_uring` backend does yet.
+accounting primitive: several planned reads can be admitted together when
+the budget can hold their combined lengths), and a compact greedy
+`Scheduler` incrementally selecting pending physical reads from an owned
+`ExecutionPlan` — greatest fitting length first, equal lengths in plan
+order, no combination search — reserving their exact bytes through an
+internal limiter before returning uniquely owned `ScheduledRead` handles
+that pair a stable `OperationId` with the reservation (scheduling primitive
+only: temporary `WaitingForBudget` backpressure stays distinct from plan
+exhaustion, exhaustion is not execution completion, and no executor or
+backend consumes scheduled reads; library-only: the CLI is unchanged)
+exist. No executor, backend selection, or `io_uring` backend does yet.
 
 ## Usage
 
