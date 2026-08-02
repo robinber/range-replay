@@ -138,7 +138,7 @@ impl ReadSize {
 /// configuration:
 ///
 /// ```
-/// use range_replay::{BudgetLimiter, ByteBudget, ExecutionConfig, ExecutionPlan, ReadSize};
+/// use range_replay::{BudgetLimiter, ByteBudget, ExecutionConfig, ReadSize};
 ///
 /// let config = ExecutionConfig::try_new(ReadSize::try_new(4)?, ByteBudget::try_new(8)?)?;
 /// let limiter = BudgetLimiter::new(config.byte_budget());
