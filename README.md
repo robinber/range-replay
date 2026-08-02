@@ -33,9 +33,16 @@ order, no combination search — reserving their exact bytes through an
 internal limiter before returning uniquely owned `ScheduledRead` handles
 that pair a stable `OperationId` with the reservation (scheduling primitive
 only: temporary `WaitingForBudget` backpressure stays distinct from plan
-exhaustion, exhaustion is not execution completion, and no executor or
-backend consumes scheduled reads; library-only: the CLI is unchanged)
-exist. No executor, backend selection, or `io_uring` backend does yet.
+exhaustion, and exhaustion is not execution completion; library-only: the
+CLI is unchanged), and a synchronous one-operation adapter
+(`read_scheduled`) executing exactly one admitted `ScheduledRead` through
+the `pread` exact-read loop into a backend-neutral `CompletedRead` that
+owns the exact physical bytes and keeps the reservation live until the
+completion is destroyed (the physical buffer is dropped before the
+reservation releases, every error releases the admitted bytes and exposes
+no partial output, and the file cursor never moves; library-only: the CLI
+is unchanged) exist. No executor loop, logical output assembly from
+physical completions, backend selection, or `io_uring` backend does yet.
 
 ## Usage
 

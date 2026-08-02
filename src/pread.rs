@@ -5,6 +5,12 @@
 //! ([`FileExt::read_at`], `pread` semantics). Planning stays pure; this module
 //! owns the first real I/O boundary and is the correctness reference that
 //! later backends must match byte for byte.
+//!
+//! Two entry points share one exact-read loop: [`read_plan`] executes a whole
+//! logical plan into [`RangeOutput`] values, and [`read_scheduled`] executes
+//! exactly one admitted [`ScheduledRead`] into a backend-neutral
+//! [`CompletedRead`] whose reservation stays live until the completion is
+//! destroyed. Neither entry point moves the file cursor.
 
 use std::collections::TryReserveError;
 use std::fs::File;
@@ -14,8 +20,10 @@ use std::os::unix::fs::FileExt;
 
 use thiserror::Error;
 
+use crate::completion::CompletedRead;
 use crate::plan::ReadPlan;
 use crate::range::ReadRange;
+use crate::scheduler::ScheduledRead;
 
 /// Reason executing a read plan against a file failed.
 ///
@@ -99,6 +107,28 @@ pub enum ReadError {
         reported: usize,
         /// The unfilled byte count that was actually available.
         remaining: usize,
+    },
+    /// A completed physical buffer does not cover its admitted range
+    /// exactly.
+    ///
+    /// The exact-read loop only returns a buffer whose length equals the
+    /// requested range length, so this variant guards completion
+    /// construction instead of describing a reachable production input.
+    /// Rejecting the mismatch keeps a broken construction path from
+    /// exposing a completion whose bytes and budget accounting disagree.
+    #[error(
+        "range [{}, {}): a completed buffer holds {actual} bytes for a \
+         {expected}-byte physical read",
+        .range.offset(),
+        .range.end()
+    )]
+    CompletionLengthMismatch {
+        /// The admitted physical range the buffer was meant to cover.
+        range: ReadRange,
+        /// The byte count the range requires.
+        expected: u64,
+        /// The byte count the rejected buffer actually holds.
+        actual: usize,
     },
     /// A read failed with an error that is not an interruption.
     #[error("range [{}, {}): read failed at offset {offset}", .range.offset(), .range.end())]
@@ -204,6 +234,110 @@ pub fn read_plan(file: &File, plan: &ReadPlan) -> Result<Vec<RangeOutput>, ReadE
         .collect()
 }
 
+/// Executes one admitted physical read against an open file.
+///
+/// The file is only borrowed and its cursor never moves, because the read
+/// goes through the positioned [`FileExt::read_at`] API (`pread`
+/// semantics). The scheduled handle is consumed: its
+/// [`ScheduledRead::range`] is the only source of the physical range, and
+/// the per-read buffer is allocated only after the admission already
+/// exists, so the buffer never occupies bytes the budget has not accounted.
+///
+/// On success the returned [`CompletedRead`] preserves the exact
+/// [`OperationId`](crate::OperationId), range, and bytes of the admitted
+/// operation and keeps its reservation live: the bytes stay counted in
+/// flight until the completion is destroyed. Short reads are completed by
+/// follow-up reads of the unfilled remainder, and
+/// [`io::ErrorKind::Interrupted`] is retried without losing progress.
+///
+/// On any error no completion exists and no partial bytes are observable:
+/// the consumed handle and the partial buffer are destroyed, which releases
+/// exactly the admitted bytes back to the scheduler's budget.
+///
+/// The function performs exactly one physical read. It never asks the
+/// scheduler for more work, waits for budget, assembles logical output,
+/// computes a checksum, or chooses a backend.
+///
+/// # Errors
+///
+/// Returns [`ReadError::UnrepresentableLength`] when the range length does
+/// not fit in `usize`, [`ReadError::BufferAllocation`] when the range
+/// buffer cannot be reserved, [`ReadError::UnexpectedEof`] with exact
+/// expected and actual counts when the file ends before the range is
+/// filled, [`ReadError::OffsetOverflow`] and [`ReadError::OverreportedRead`]
+/// as exact-read loop guards, [`ReadError::CompletionLengthMismatch`] as a
+/// completion-construction guard, and [`ReadError::Io`] for every other I/O
+/// failure, preserving the original [`io::Error`] as its source.
+///
+/// # Examples
+///
+/// ```
+/// use std::fs::File;
+/// use std::io::Write;
+///
+/// use range_replay::{
+///     ByteBudget, ExecutionConfig, ExecutionPlan, ReadPlan, ReadRange, ReadSize,
+///     ScheduleDecision, Scheduler, read_scheduled,
+/// };
+///
+/// let path = std::env::temp_dir()
+///     .join(format!("range-replay-doc-read-scheduled-{}", std::process::id()));
+/// File::create_new(&path)?.write_all(b"0123456789abcdef")?;
+/// let file = File::open(&path)?;
+///
+/// let plan = ReadPlan::try_from_schedule(&[ReadRange::try_new(2, 3)?])?;
+/// let config = ExecutionConfig::try_new(ReadSize::try_new(3)?, ByteBudget::try_new(3)?)?;
+/// let mut scheduler = Scheduler::try_new(ExecutionPlan::try_from_read_plan(&plan, config)?)?;
+///
+/// let ScheduleDecision::Ready(scheduled) = scheduler.schedule_next()? else {
+///     unreachable!("one three-byte read fits the whole budget");
+/// };
+/// assert_eq!(scheduler.in_flight_bytes(), 3);
+///
+/// let completed = read_scheduled(&file, scheduled)?;
+/// assert_eq!(completed.id().logical_range_index(), 0);
+/// assert_eq!(completed.id().operation_index(), 0);
+/// assert_eq!(completed.range(), ReadRange::try_new(2, 3)?);
+/// assert_eq!(completed.bytes(), b"234");
+///
+/// // The admitted bytes stay in flight while the completion is alive...
+/// assert_eq!(scheduler.in_flight_bytes(), 3);
+///
+/// // ...and are released only when the completion is destroyed.
+/// drop(completed);
+/// assert_eq!(scheduler.in_flight_bytes(), 0);
+/// assert_eq!(scheduler.available_bytes(), 3);
+///
+/// std::fs::remove_file(&path)?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn read_scheduled(file: &File, scheduled: ScheduledRead) -> Result<CompletedRead, ReadError> {
+    read_scheduled_with(|buffer, offset| file.read_at(buffer, offset), scheduled)
+}
+
+/// Executes one admitted physical read through a positioned-read callback.
+///
+/// This is the deterministic seam under [`read_scheduled`]: production
+/// passes a closure over a borrowed [`File`], tests pass scripted closures.
+/// The callback contract is the one documented on [`read_range_exact`]. The
+/// scheduled handle is consumed either into the returned completion or, on
+/// any error, into an automatic release of its admitted bytes.
+fn read_scheduled_with<F>(read_at: F, scheduled: ScheduledRead) -> Result<CompletedRead, ReadError>
+where
+    F: FnMut(&mut [u8], u64) -> io::Result<usize>,
+{
+    let range = scheduled.range();
+    let bytes = read_range_exact(read_at, range)?;
+
+    CompletedRead::try_new(bytes, scheduled).map_err(|mismatch| {
+        ReadError::CompletionLengthMismatch {
+            range,
+            expected: mismatch.expected,
+            actual: mismatch.actual,
+        }
+    })
+}
+
 /// Fills a whole range through a positioned-read callback.
 ///
 /// `read_at` must follow [`FileExt::read_at`] semantics: it reads into the
@@ -290,9 +424,12 @@ mod tests {
     use std::path::PathBuf;
     use std::{env, fs, io, process};
 
-    use super::{ReadError, read_plan, read_range_exact};
+    use super::{ReadError, read_plan, read_range_exact, read_scheduled, read_scheduled_with};
+    use crate::budget::ByteBudget;
+    use crate::execution::{ExecutionConfig, ExecutionPlan, ReadSize};
     use crate::plan::ReadPlan;
     use crate::range::ReadRange;
+    use crate::scheduler::{ScheduleDecision, ScheduledRead, Scheduler};
 
     const FIXTURE: &[u8] = b"0123456789abcdef";
 
@@ -308,9 +445,9 @@ mod tests {
         env::temp_dir().join(format!("range-replay-pread-{test}-{}", process::id()))
     }
 
-    fn with_fixture_file<T>(test: &str, run: impl FnOnce(&mut File) -> T) -> T {
+    fn with_file_content<T>(test: &str, contents: &[u8], run: impl FnOnce(&mut File) -> T) -> T {
         let path = fixture_path(test);
-        fs::write(&path, FIXTURE).expect("fixture file is writable");
+        fs::write(&path, contents).expect("fixture file is writable");
         let mut file = File::open(&path).expect("fixture file opens");
 
         let result = run(&mut file);
@@ -319,6 +456,29 @@ mod tests {
         fs::remove_file(&path).expect("fixture file is removable");
 
         result
+    }
+
+    fn with_fixture_file<T>(test: &str, run: impl FnOnce(&mut File) -> T) -> T {
+        with_file_content(test, FIXTURE, run)
+    }
+
+    fn admitted_single(offset: u64, length: u64, budget_bytes: u64) -> (Scheduler, ScheduledRead) {
+        let read_size = ReadSize::try_new(length).expect("test read sizes are non-zero");
+        let budget = ByteBudget::try_new(budget_bytes).expect("test budgets are non-zero");
+        let config = ExecutionConfig::try_new(read_size, budget)
+            .expect("test configurations pair a read size with a large enough budget");
+        let execution = ExecutionPlan::try_from_read_plan(&plan(&[range(offset, length)]), config)
+            .expect("test plans derive without failure");
+        let mut scheduler =
+            Scheduler::try_new(execution).expect("test schedulers construct without failure");
+
+        match scheduler
+            .schedule_next()
+            .expect("test scheduling decisions succeed")
+        {
+            ScheduleDecision::Ready(read) => (scheduler, read),
+            decision => panic!("expected a ready decision, got {decision:?}"),
+        }
     }
 
     #[test]
@@ -516,6 +676,211 @@ mod tests {
         assert_eq!(failed, range(10, 4));
         assert_eq!(offset, 12);
         assert_eq!(source.kind(), ErrorKind::PermissionDenied);
+    }
+
+    #[test]
+    fn read_scheduled_returns_the_exact_completion_and_releases_only_on_drop() {
+        with_fixture_file("scheduled-success", |file| {
+            let (scheduler, admission) = admitted_single(2, 3, 3);
+            let id = admission.id();
+            assert_eq!(scheduler.in_flight_bytes(), 3);
+            assert_eq!(scheduler.available_bytes(), 0);
+
+            let completed =
+                read_scheduled(file, admission).expect("the range is inside the fixture");
+
+            assert_eq!(completed.id(), id);
+            assert_eq!(completed.id().logical_range_index(), 0);
+            assert_eq!(completed.id().operation_index(), 0);
+            assert_eq!(completed.range(), range(2, 3));
+            assert_eq!(completed.bytes(), b"234");
+            assert_eq!(scheduler.in_flight_bytes(), 3);
+            assert_eq!(scheduler.available_bytes(), 0);
+
+            drop(completed);
+            assert_eq!(scheduler.in_flight_bytes(), 0);
+            assert_eq!(scheduler.available_bytes(), 3);
+        });
+    }
+
+    #[test]
+    fn read_scheduled_leaves_the_file_cursor_unchanged() {
+        with_fixture_file("scheduled-cursor", |file| {
+            file.seek(SeekFrom::Start(7)).expect("fixture file seeks");
+            let (_scheduler, admission) = admitted_single(2, 3, 3);
+
+            let completed =
+                read_scheduled(file, admission).expect("the range is inside the fixture");
+            drop(completed);
+
+            let cursor = file
+                .stream_position()
+                .expect("fixture file reports its cursor");
+            assert_eq!(cursor, 7);
+        });
+    }
+
+    #[test]
+    fn read_scheduled_reports_partial_eof_and_restores_the_budget() {
+        with_file_content("scheduled-partial-eof", b"abc", |file| {
+            file.seek(SeekFrom::Start(1)).expect("fixture file seeks");
+            let (scheduler, admission) = admitted_single(1, 4, 4);
+            assert_eq!(scheduler.in_flight_bytes(), 4);
+
+            let error =
+                read_scheduled(file, admission).expect_err("the file ends inside the range");
+
+            assert!(matches!(
+                error,
+                ReadError::UnexpectedEof {
+                    range: failed,
+                    expected: 4,
+                    actual: 2,
+                } if failed == range(1, 4)
+            ));
+            assert_eq!(scheduler.in_flight_bytes(), 0);
+            assert_eq!(scheduler.available_bytes(), 4);
+
+            let cursor = file
+                .stream_position()
+                .expect("fixture file reports its cursor");
+            assert_eq!(cursor, 1);
+        });
+    }
+
+    #[test]
+    fn read_scheduled_with_completes_short_reads_into_one_exact_completion() {
+        let (scheduler, admission) = admitted_single(10, 3, 3);
+        let mut calls = Vec::new();
+        let mut step = 0;
+
+        let completed = read_scheduled_with(
+            |buffer, offset| {
+                calls.push((buffer.len(), offset));
+                step += 1;
+                match step {
+                    1 => {
+                        buffer[..2].copy_from_slice(b"ab");
+                        Ok(2)
+                    }
+                    2 => {
+                        buffer[..1].copy_from_slice(b"c");
+                        Ok(1)
+                    }
+                    _ => panic!("no further read expected"),
+                }
+            },
+            admission,
+        )
+        .expect("the scripted reads fill the range");
+
+        assert_eq!(calls, vec![(3, 10), (1, 12)]);
+        assert_eq!(completed.range(), range(10, 3));
+        assert_eq!(completed.bytes(), b"abc");
+        assert_eq!(scheduler.in_flight_bytes(), 3);
+    }
+
+    #[test]
+    fn read_scheduled_with_retries_interruption_without_advancing_or_releasing() {
+        let (scheduler, admission) = admitted_single(10, 3, 3);
+        let mut calls = Vec::new();
+        let mut step = 0;
+
+        let completed = read_scheduled_with(
+            |buffer, offset| {
+                calls.push((buffer.len(), offset));
+                step += 1;
+                match step {
+                    1 => Err(io::Error::new(ErrorKind::Interrupted, "signal")),
+                    2 => {
+                        buffer.copy_from_slice(b"abc");
+                        Ok(3)
+                    }
+                    _ => panic!("no further read expected"),
+                }
+            },
+            admission,
+        )
+        .expect("the retried read fills the range");
+
+        assert_eq!(calls, vec![(3, 10), (3, 10)]);
+        assert_eq!(completed.bytes(), b"abc");
+        assert_eq!(scheduler.in_flight_bytes(), 3);
+
+        drop(completed);
+        assert_eq!(scheduler.in_flight_bytes(), 0);
+    }
+
+    #[test]
+    fn read_scheduled_with_reports_eof_before_the_first_byte_and_restores_the_budget() {
+        let (scheduler, admission) = admitted_single(10, 4, 4);
+
+        let error = read_scheduled_with(|_buffer, _offset| Ok(0), admission)
+            .expect_err("the file ends before the range");
+
+        assert!(matches!(
+            error,
+            ReadError::UnexpectedEof {
+                expected: 4,
+                actual: 0,
+                ..
+            }
+        ));
+        assert_eq!(scheduler.in_flight_bytes(), 0);
+        assert_eq!(scheduler.available_bytes(), 4);
+    }
+
+    #[test]
+    fn read_scheduled_with_preserves_the_io_error_and_restores_the_budget() {
+        let (scheduler, admission) = admitted_single(10, 4, 4);
+        let mut step = 0;
+
+        let error = read_scheduled_with(
+            |buffer, _offset| {
+                step += 1;
+                match step {
+                    1 => {
+                        buffer[..2].copy_from_slice(b"ab");
+                        Ok(2)
+                    }
+                    _ => Err(io::Error::new(ErrorKind::PermissionDenied, "denied")),
+                }
+            },
+            admission,
+        )
+        .expect_err("the second read fails");
+
+        assert!(std::error::Error::source(&error).is_some());
+
+        let ReadError::Io {
+            range: failed,
+            offset,
+            source,
+        } = error
+        else {
+            panic!("expected an I/O error, got {error:?}");
+        };
+        assert_eq!(failed, range(10, 4));
+        assert_eq!(offset, 12);
+        assert_eq!(source.kind(), ErrorKind::PermissionDenied);
+        assert_eq!(scheduler.in_flight_bytes(), 0);
+        assert_eq!(scheduler.available_bytes(), 4);
+    }
+
+    #[test]
+    fn read_scheduled_with_rejects_an_unallocatable_length_before_any_read() {
+        let (scheduler, admission) = admitted_single(0, u64::MAX, u64::MAX);
+        assert_eq!(scheduler.in_flight_bytes(), u64::MAX);
+
+        let error = read_scheduled_with(
+            |_buffer, _offset| panic!("no read is expected before a buffer exists"),
+            admission,
+        )
+        .expect_err("no buffer of u64::MAX bytes can be reserved");
+
+        assert!(matches!(error, ReadError::BufferAllocation { .. }));
+        assert_eq!(scheduler.in_flight_bytes(), 0);
+        assert_eq!(scheduler.available_bytes(), u64::MAX);
     }
 
     #[test]
