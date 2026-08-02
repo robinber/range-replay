@@ -16,7 +16,10 @@ mod schedule;
 
 pub use crate::budget::{BudgetError, BudgetLimiter, ByteBudget, Reservation, ReservationError};
 pub use crate::checksum::{RangeChecksum, checksum};
-pub use crate::execution::{ExecutionPlan, ExecutionPlanError, PlannedRange};
+pub use crate::execution::{
+    ExecutionConfig, ExecutionConfigError, ExecutionPlan, ExecutionPlanError, PlannedRange,
+    ReadSize, ReadSizeError,
+};
 pub use crate::plan::{PlanError, ReadPlan, coalesce};
 pub use crate::pread::{RangeOutput, ReadError, read_plan};
 pub use crate::range::{RangeError, ReadRange};

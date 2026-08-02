@@ -54,15 +54,17 @@ pub enum ReservationError {
     },
 }
 
-/// A validated, non-zero limit on budgeted bytes.
+/// A validated, non-zero limit on the total bytes in flight at once.
 ///
-/// The same limit bounds two distinct things: the size of one physical read
-/// planned by an [`ExecutionPlan`](crate::ExecutionPlan), and the total
-/// bytes a [`BudgetLimiter`] keeps in flight at runtime. A budget of `0` is
-/// rejected at construction rather than treated as temporary backpressure:
-/// no non-empty read could ever fit under it, so a zero budget can never
-/// admit any work and is an invalid configuration instead of a momentarily
-/// full one.
+/// The budget bounds runtime capacity only: the sum of bytes all live
+/// [`Reservation`]s hold together, enforced by a [`BudgetLimiter`]. It never
+/// shapes a physical plan — the maximum length of one planned read is the
+/// separate [`ReadSize`](crate::ReadSize) policy, and
+/// [`ExecutionConfig`](crate::ExecutionConfig) pairs the two so that one
+/// full read always fits under the budget. A budget of `0` is rejected at
+/// construction rather than treated as temporary backpressure: no non-empty
+/// read could ever fit under it, so a zero budget can never admit any work
+/// and is an invalid configuration instead of a momentarily full one.
 ///
 /// `ByteBudget` is [`Copy`] because it is immutable configuration: copying a
 /// limit cannot multiply any capacity. A [`Reservation`] is the opposite —
@@ -91,7 +93,7 @@ pub struct ByteBudget {
 }
 
 impl ByteBudget {
-    /// Creates a budget allowing physical reads of up to `bytes` bytes.
+    /// Creates a budget allowing up to `bytes` bytes in flight at once.
     ///
     /// # Errors
     ///
@@ -216,9 +218,10 @@ impl BudgetLimiter {
     /// Returns [`ReservationError::ExceedsBudget`] when the range is longer
     /// than the total limit and could never be admitted by this limiter,
     /// even with nothing in flight. The state is unchanged. A physical read
-    /// produced by an [`ExecutionPlan`](crate::ExecutionPlan) derived with
-    /// the same budget never exceeds it, so such reads cannot hit this
-    /// error.
+    /// produced by an [`ExecutionPlan`](crate::ExecutionPlan) never exceeds
+    /// its configured [`ReadSize`](crate::ReadSize), and
+    /// [`ExecutionConfig`](crate::ExecutionConfig) guarantees that read size
+    /// fits under the budget, so such reads cannot hit this error.
     pub fn try_reserve(&self, range: ReadRange) -> Result<Option<Reservation>, ReservationError> {
         let requested = range.length();
         let limit = self.limit.bytes();
@@ -308,7 +311,7 @@ impl Drop for Reservation {
 #[cfg(test)]
 mod tests {
     use super::{BudgetError, BudgetLimiter, ByteBudget, Reservation, ReservationError};
-    use crate::execution::ExecutionPlan;
+    use crate::execution::{ExecutionConfig, ExecutionPlan, ReadSize};
     use crate::plan::ReadPlan;
     use crate::range::ReadRange;
 
@@ -318,6 +321,22 @@ mod tests {
 
     fn budget(bytes: u64) -> ByteBudget {
         ByteBudget::try_new(bytes).expect("test budgets are non-zero")
+    }
+
+    fn execution(schedule: &[ReadRange], read_size_bytes: u64, budget_bytes: u64) -> ExecutionPlan {
+        let plan = ReadPlan::try_from_schedule(schedule).expect("test schedules are not empty");
+        let read_size = ReadSize::try_new(read_size_bytes).expect("test read sizes are non-zero");
+        let config = ExecutionConfig::try_new(read_size, budget(budget_bytes))
+            .expect("test configurations pair a read size with a large enough budget");
+
+        ExecutionPlan::try_from_read_plan(&plan, config).expect("test plans derive without failure")
+    }
+
+    fn planned_read(execution: &ExecutionPlan, operation_index: u64) -> ReadRange {
+        execution.ranges()[0]
+            .physical_read(operation_index)
+            .expect("test lookups stay within the generation contract")
+            .expect("test indexes stay below the operation count")
     }
 
     fn admitted(limiter: &BudgetLimiter, range: ReadRange) -> Reservation {
@@ -531,22 +550,54 @@ mod tests {
 
     #[test]
     fn a_physical_read_from_a_compact_execution_plan_is_admitted_unchanged() {
-        let schedule = [span(0, 16)];
-        let plan = ReadPlan::try_from_schedule(&schedule).expect("test schedules are not empty");
-        let execution = ExecutionPlan::try_from_read_plan(&plan, budget(8))
-            .expect("test plans derive without failure");
+        let execution = execution(&[span(0, 16)], 8, 8);
+        let read = planned_read(&execution, 0);
 
-        let planned = &execution.ranges()[0];
-        let read = planned
-            .physical_read(0)
-            .expect("test lookups stay within the generation contract")
-            .expect("index zero exists for a non-empty planned range");
-
-        let limiter = BudgetLimiter::new(execution.budget());
+        let limiter = BudgetLimiter::new(execution.config().byte_budget());
         let reservation = admitted(&limiter, read);
 
         assert_eq!(reservation.range(), span(0, 8));
         assert_eq!(counters(&limiter), (8, 0));
-        assert_eq!(planned.operation_count(), 2);
+        assert_eq!(execution.ranges()[0].operation_count(), 2);
+    }
+
+    #[test]
+    fn two_full_planned_reads_are_admitted_together_and_the_tail_after_one_release() {
+        let execution = execution(&[span(0, 10)], 4, 8);
+        let planned = &execution.ranges()[0];
+        assert_eq!(planned.operation_count(), 3);
+
+        let first = planned_read(&execution, 0);
+        let second = planned_read(&execution, 1);
+        let tail = planned_read(&execution, 2);
+        assert_eq!(first, span(0, 4));
+        assert_eq!(second, span(4, 8));
+        assert_eq!(tail, span(8, 10));
+
+        let limiter = BudgetLimiter::new(execution.config().byte_budget());
+
+        let a = admitted(&limiter, first);
+        assert_eq!(counters(&limiter), (4, 4));
+
+        let b = admitted(&limiter, second);
+        assert_eq!(counters(&limiter), (8, 0));
+
+        assert!(
+            limiter
+                .try_reserve(tail)
+                .expect("the tail is under the total limit")
+                .is_none()
+        );
+        assert_eq!(counters(&limiter), (8, 0));
+
+        drop(a);
+        assert_eq!(counters(&limiter), (4, 4));
+
+        let c = admitted(&limiter, tail);
+        assert_eq!(counters(&limiter), (6, 2));
+
+        drop(b);
+        drop(c);
+        assert_eq!(counters(&limiter), (0, 8));
     }
 }

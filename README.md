@@ -17,13 +17,17 @@ type owning the canonical coalesced ranges, the synchronous positioned-read
 minimal synchronous command line exposing that pipeline, deterministic
 per-range SHA-256 checksums over completed range outputs (`checksum`,
 library-only: the CLI neither renders nor compares checksums), and validated
-budget configuration with compact deterministic physical planning
-(`ByteBudget` and the derived `ExecutionPlan`, which stores one planned entry
-per logical range and computes each physical read on demand instead of
-materializing them; library-only: the CLI takes no budget), and a
-single-threaded `BudgetLimiter` enforcing the in-flight byte budget through
-uniquely owned RAII `Reservation` guards (the accounting primitive only: no
-scheduler or backend acquires reservations yet) exist. No scheduling, backend
+execution configuration with compact deterministic physical planning
+(`ReadSize` bounds one physical read, `ByteBudget` bounds the total bytes in
+flight, `ExecutionConfig` validates `read_size <= byte_budget` by
+construction, and the derived `ExecutionPlan` splits with the read size only,
+stores one planned entry per logical range, and computes each physical read
+on demand instead of materializing them; library-only: the CLI takes no
+configuration arguments), and a single-threaded `BudgetLimiter` enforcing the
+in-flight byte budget through uniquely owned RAII `Reservation` guards (the
+accounting primitive only: several planned reads can be admitted together
+when the budget can hold their combined lengths, but no scheduler or backend
+acquires reservations or submits reads yet) exist. No scheduling, backend
 selection, or `io_uring` backend does yet.
 
 ## Usage
