@@ -26,7 +26,7 @@ on demand instead of materializing them; library-only: the CLI takes no
 configuration arguments), and a single-threaded `BudgetLimiter` enforcing the
 in-flight byte budget through uniquely owned RAII `Reservation` guards (the
 accounting primitive only: several planned reads can be admitted together
-when the budget holds more than one read size, but no scheduler or backend
+when the budget can hold their combined lengths, but no scheduler or backend
 acquires reservations or submits reads yet) exist. No scheduling, backend
 selection, or `io_uring` backend does yet.
 

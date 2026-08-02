@@ -18,8 +18,8 @@
 //! never affects splitting. Because [`ExecutionConfig`] validates
 //! `read_size <= byte_budget` at construction, every planned physical read
 //! fits under an empty limiter built from the same configuration, and
-//! several reads can be admitted together whenever the budget holds more
-//! than one read size.
+//! several reads can be admitted together whenever the budget can hold
+//! their combined lengths.
 //!
 //! Splitting is deterministic and greedy: each logical range is covered from
 //! its start offset by the largest read that exceeds neither the bytes
@@ -148,10 +148,11 @@ impl ReadSize {
 ///
 /// The two values are independent policies. The read size shapes the
 /// physical plan; the budget only governs how many already-planned bytes a
-/// limiter admits at once. A budget larger than the read size lets several
-/// physical reads be in flight simultaneously without requiring several
-/// threads — admission is accounting, not parallel execution. No scheduler
-/// or backend submits reads yet.
+/// limiter admits at once. A budget that can hold the combined lengths of
+/// several planned reads lets them be in flight simultaneously without
+/// requiring several threads — admission is accounting, not parallel
+/// execution, and a merely valid configuration promises only that one full
+/// read fits. No scheduler or backend submits reads yet.
 ///
 /// An invalid pairing is unrepresentable: `try_new` rejects a read size
 /// larger than the budget with the exact offending values instead of
