@@ -73,10 +73,23 @@ pub(crate) struct LengthMismatch {
 /// requires_clone::<range_replay::CompletedRead>();
 /// ```
 ///
+/// The complete struct literal below fails only because the fields are
+/// private, so it would start compiling — and fail this test — if the
+/// fields ever became public:
+///
 /// ```compile_fail
-/// let forged = range_replay::CompletedRead {
-///     bytes: Vec::new(),
-/// };
+/// fn forge(
+///     bytes: Vec<u8>,
+///     scheduled: range_replay::ScheduledRead,
+/// ) -> range_replay::CompletedRead {
+///     range_replay::CompletedRead { bytes, scheduled }
+/// }
+/// ```
+///
+/// ```compile_fail
+/// fn tamper(completed: &mut range_replay::CompletedRead) {
+///     completed.bytes.pop();
+/// }
 /// ```
 #[derive(Debug)]
 #[must_use = "dropping a completed read destroys its bytes and releases its admitted budget bytes"]
@@ -106,6 +119,12 @@ impl CompletedRead {
         if u64::try_from(actual).is_ok_and(|converted| converted == expected) {
             Ok(Self { bytes, scheduled })
         } else {
+            // Parameters would drop in reverse declaration order, releasing
+            // the reservation while the rejected buffer still exists; drop
+            // both explicitly to keep buffer-before-reservation destruction
+            // on this path too.
+            drop(bytes);
+            drop(scheduled);
             Err(LengthMismatch { expected, actual })
         }
     }

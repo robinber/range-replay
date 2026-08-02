@@ -1,8 +1,9 @@
 //! Synchronous positioned-read reference backend.
 //!
-//! This backend executes an already validated [`ReadPlan`] against an already
-//! open [`File`] through the safe Unix positioned-read API
-//! ([`FileExt::read_at`], `pread` semantics). Planning stays pure; this module
+//! This backend executes positioned exact reads against an already open
+//! [`File`] through the safe Unix positioned-read API ([`FileExt::read_at`],
+//! `pread` semantics), covering both an already validated [`ReadPlan`] and
+//! one already admitted [`ScheduledRead`]. Planning stays pure; this module
 //! owns the first real I/O boundary and is the correctness reference that
 //! later backends must match byte for byte.
 //!
@@ -25,12 +26,22 @@ use crate::plan::ReadPlan;
 use crate::range::ReadRange;
 use crate::scheduler::ScheduledRead;
 
-/// Reason executing a read plan against a file failed.
+/// Reason a positioned exact read against a file failed.
 ///
-/// Every variant carries the range whose read failed, so the error points
-/// back into the plan. Execution is fail-closed: the first failing range
-/// aborts the whole call, and output for previously completed ranges is never
-/// observable.
+/// The same error serves both entry points of this backend: [`read_plan`],
+/// which executes a whole validated plan, and [`read_scheduled`], which
+/// executes exactly one admitted physical read. Every variant carries the
+/// range whose read failed, so the error points back into the plan or the
+/// admitted operation.
+///
+/// Both entry points are fail-closed. A failing [`read_plan`] call aborts
+/// at its first failing range and never exposes output for previously
+/// completed ranges; a failing [`read_scheduled`] call exposes no
+/// completion and releases its admitted budget bytes. The
+/// [`Self::OffsetOverflow`], [`Self::OverreportedRead`], and
+/// [`Self::CompletionLengthMismatch`] variants are loop and construction
+/// guards for states unreachable through validated inputs rather than
+/// ordinary I/O outcomes.
 #[derive(Debug, Error)]
 pub enum ReadError {
     /// The range length does not fit in `usize`, so no buffer of that size is
@@ -148,6 +159,12 @@ pub enum ReadError {
 /// cover the associated range completely: `bytes().len()` equals the range
 /// length. Both fields stay private so no caller can construct or mutate an
 /// output that breaks this invariant.
+///
+/// A range output is the logical counterpart of the physical
+/// [`CompletedRead`]: it covers one complete canonical logical range of a
+/// [`ReadPlan`] and holds no budget reservation, while a completion covers
+/// one admitted physical operation and keeps its reservation live. No slice
+/// assembles physical completions into logical outputs yet.
 #[derive(Debug, PartialEq, Eq)]
 pub struct RangeOutput {
     range: ReadRange,
