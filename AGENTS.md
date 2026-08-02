@@ -36,6 +36,7 @@ silently choose the interpretation that permits more work.
     checksum.rs  deterministic per-range SHA-256 checksums
     completion.rs backend-neutral exact completion of one admitted physical read (`CompletedRead`)
     execution.rs read-size-derived physical planning (`ReadSize`, `ExecutionConfig`, `ExecutionPlan`)
+    output.rs    logical outputs assembled from physical completions (`RangeOutput`, `OutputAssembler`)
     plan.rs      pure planning over range collections (coalescing, `ReadPlan`)
     pread.rs     synchronous positioned-read reference backend (`read_plan`, `read_scheduled`)
     range.rs     validated file-range value types

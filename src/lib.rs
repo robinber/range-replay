@@ -10,6 +10,7 @@ mod budget;
 mod checksum;
 mod completion;
 mod execution;
+mod output;
 mod plan;
 mod pread;
 mod range;
@@ -23,8 +24,9 @@ pub use crate::execution::{
     ExecutionConfig, ExecutionConfigError, ExecutionPlan, ExecutionPlanError, PlannedRange,
     ReadSize, ReadSizeError,
 };
+pub use crate::output::{AssemblyError, OutputAssembler, RangeOutput};
 pub use crate::plan::{PlanError, ReadPlan, coalesce};
-pub use crate::pread::{RangeOutput, ReadError, read_plan, read_scheduled};
+pub use crate::pread::{ReadError, read_plan, read_scheduled};
 pub use crate::range::{RangeError, ReadRange};
 pub use crate::schedule::{ScheduleError, parse_schedule};
 pub use crate::scheduler::{

@@ -14,8 +14,9 @@
 //! today. A completion is also distinct from the logical
 //! [`RangeOutput`](crate::RangeOutput): a completion covers one *physical*
 //! operation of an execution plan, while a range output covers one complete
-//! canonical *logical* range. No slice assembles physical completions into
-//! logical outputs yet.
+//! canonical *logical* range. An
+//! [`OutputAssembler`](crate::OutputAssembler) assembles recorded
+//! completions into logical outputs; no executor drives that loop yet.
 
 use crate::range::ReadRange;
 use crate::scheduler::{OperationId, ScheduledRead};

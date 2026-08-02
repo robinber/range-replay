@@ -22,6 +22,7 @@ use std::os::unix::fs::FileExt;
 use thiserror::Error;
 
 use crate::completion::CompletedRead;
+use crate::output::RangeOutput;
 use crate::plan::ReadPlan;
 use crate::range::ReadRange;
 use crate::scheduler::ScheduledRead;
@@ -38,10 +39,10 @@ use crate::scheduler::ScheduledRead;
 /// at its first failing range and never exposes output for previously
 /// completed ranges; a failing [`read_scheduled`] call exposes no
 /// completion and releases its admitted budget bytes. The
-/// [`Self::OffsetOverflow`], [`Self::OverreportedRead`], and
-/// [`Self::CompletionLengthMismatch`] variants are loop and construction
-/// guards for states unreachable through validated inputs rather than
-/// ordinary I/O outcomes.
+/// [`Self::OffsetOverflow`], [`Self::OverreportedRead`],
+/// [`Self::CompletionLengthMismatch`], and [`Self::OutputLengthMismatch`]
+/// variants are loop and construction guards for states unreachable through
+/// validated inputs rather than ordinary I/O outcomes.
 #[derive(Debug, Error)]
 pub enum ReadError {
     /// The range length does not fit in `usize`, so no buffer of that size is
@@ -141,6 +142,27 @@ pub enum ReadError {
         /// The byte count the rejected buffer actually holds.
         actual: usize,
     },
+    /// A fully read logical buffer does not cover its range exactly.
+    ///
+    /// The exact-read loop only returns a buffer whose length equals the
+    /// requested range length, so this variant guards logical output
+    /// construction instead of describing a reachable production input.
+    /// Rejecting the mismatch keeps a broken construction path from
+    /// exposing an output whose bytes and range disagree.
+    #[error(
+        "range [{}, {}): a logical buffer holds {actual} bytes for a \
+         {expected}-byte range",
+        .range.offset(),
+        .range.end()
+    )]
+    OutputLengthMismatch {
+        /// The logical range the buffer was meant to cover.
+        range: ReadRange,
+        /// The byte count the range requires.
+        expected: u64,
+        /// The byte count the rejected buffer actually holds.
+        actual: usize,
+    },
     /// A read failed with an error that is not an interruption.
     #[error("range [{}, {}): read failed at offset {offset}", .range.offset(), .range.end())]
     Io {
@@ -151,39 +173,6 @@ pub enum ReadError {
         /// The underlying I/O failure.
         source: io::Error,
     },
-}
-
-/// One fully read range and the owned bytes covering it exactly.
-///
-/// A value only exists after a successful exact read, so the bytes always
-/// cover the associated range completely: `bytes().len()` equals the range
-/// length. Both fields stay private so no caller can construct or mutate an
-/// output that breaks this invariant.
-///
-/// A range output is the logical counterpart of the physical
-/// [`CompletedRead`]: it covers one complete canonical logical range of a
-/// [`ReadPlan`] and holds no budget reservation, while a completion covers
-/// one admitted physical operation and keeps its reservation live. No slice
-/// assembles physical completions into logical outputs yet.
-#[derive(Debug, PartialEq, Eq)]
-pub struct RangeOutput {
-    range: ReadRange,
-    bytes: Vec<u8>,
-}
-
-impl RangeOutput {
-    /// Returns the range the bytes cover.
-    #[must_use]
-    pub const fn range(&self) -> ReadRange {
-        self.range
-    }
-
-    /// Returns the bytes covering the range, whose length always equals the
-    /// range length.
-    #[must_use]
-    pub fn bytes(&self) -> &[u8] {
-        &self.bytes
-    }
 }
 
 /// Executes every range of a validated plan against an open file.
@@ -209,9 +198,10 @@ impl RangeOutput {
 /// be reserved, [`ReadError::UnexpectedEof`] when the file ends before a
 /// range is filled, [`ReadError::OffsetOverflow`] if the exact-read loop
 /// arithmetic would overflow, [`ReadError::OverreportedRead`] if a read
-/// reports more bytes than the unfilled remainder, and [`ReadError::Io`] for
-/// every other I/O failure, preserving the original [`io::Error`] as its
-/// source.
+/// reports more bytes than the unfilled remainder,
+/// [`ReadError::OutputLengthMismatch`] as a logical-output construction
+/// guard, and [`ReadError::Io`] for every other I/O failure, preserving the
+/// original [`io::Error`] as its source.
 ///
 /// # Examples
 ///
@@ -245,8 +235,13 @@ pub fn read_plan(file: &File, plan: &ReadPlan) -> Result<Vec<RangeOutput>, ReadE
     plan.ranges()
         .iter()
         .map(|&range| {
-            read_range_exact(|buffer, offset| file.read_at(buffer, offset), range)
-                .map(|bytes| RangeOutput { range, bytes })
+            let bytes = read_range_exact(|buffer, offset| file.read_at(buffer, offset), range)?;
+
+            RangeOutput::try_new(range, bytes).map_err(|mismatch| ReadError::OutputLengthMismatch {
+                range,
+                expected: mismatch.expected,
+                actual: mismatch.actual,
+            })
         })
         .collect()
 }
