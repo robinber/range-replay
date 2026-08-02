@@ -8,6 +8,7 @@
 
 mod budget;
 mod checksum;
+mod completion;
 mod execution;
 mod plan;
 mod pread;
@@ -17,12 +18,13 @@ mod scheduler;
 
 pub use crate::budget::{BudgetError, BudgetLimiter, ByteBudget, Reservation, ReservationError};
 pub use crate::checksum::{RangeChecksum, checksum};
+pub use crate::completion::CompletedRead;
 pub use crate::execution::{
     ExecutionConfig, ExecutionConfigError, ExecutionPlan, ExecutionPlanError, PlannedRange,
     ReadSize, ReadSizeError,
 };
 pub use crate::plan::{PlanError, ReadPlan, coalesce};
-pub use crate::pread::{RangeOutput, ReadError, read_plan};
+pub use crate::pread::{RangeOutput, ReadError, read_plan, read_scheduled};
 pub use crate::range::{RangeError, ReadRange};
 pub use crate::schedule::{ScheduleError, parse_schedule};
 pub use crate::scheduler::{

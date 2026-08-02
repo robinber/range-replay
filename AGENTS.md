@@ -34,9 +34,10 @@ silently choose the interpretation that permits more work.
     lib.rs       library surface (planning, validation, backends)
     budget.rs    in-flight byte budget and runtime accounting (`ByteBudget`, `BudgetLimiter`)
     checksum.rs  deterministic per-range SHA-256 checksums
+    completion.rs backend-neutral exact completion of one admitted physical read (`CompletedRead`)
     execution.rs read-size-derived physical planning (`ReadSize`, `ExecutionConfig`, `ExecutionPlan`)
     plan.rs      pure planning over range collections (coalescing, `ReadPlan`)
-    pread.rs     synchronous positioned-read reference backend
+    pread.rs     synchronous positioned-read reference backend (`read_plan`, `read_scheduled`)
     range.rs     validated file-range value types
     schedule.rs  textual schedule parsing (`offset,length` lines)
     scheduler.rs budget-aware greedy selection of pending physical reads
