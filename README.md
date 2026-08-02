@@ -41,10 +41,26 @@ exact-read loop into a backend-neutral `CompletedRead` that owns the exact
 physical bytes and keeps the reservation live until the completion is
 destroyed. The physical buffer is dropped before the reservation releases,
 every error releases the admitted bytes and exposes no partial output, and
-the file cursor never moves. All of this stays library-only — the CLI
-invocation and output are unchanged. No executor loop, logical output
-assembly from physical completions, backend selection, or `io_uring`
-backend exists yet.
+the file cursor never moves.
+
+A backend-neutral logical assembly primitive (`OutputAssembler`) also
+exists: prepared fallibly from one `ExecutionPlan` before any backend work
+runs, it allocates every final logical buffer up front (deliberately
+outside the in-flight byte budget, which bounds physical buffers only),
+accepts exact `CompletedRead` values in arbitrary completion order,
+validates identity, expected physical range, and checked destination
+bounds before copying any byte, tracks progress with one compact
+remaining-byte counter per logical range (never per-operation state), and
+exposes `RangeOutput` values only after every logical byte was recorded —
+finalization moves buffers into plan-order outputs without recopying.
+Completions must come from the scheduler run paired with the prepared
+plan; two independent runs over byte-for-byte identical plans are not
+distinguished, and a duplicate from such a run that still fits the
+remaining count double-counts progress undetected (cross-run provenance
+is future executor work). All of this
+stays library-only — the CLI invocation and output are unchanged. No
+executor loop drives schedule/submit/complete/drain, and no backend
+selection or `io_uring` backend exists yet.
 
 ## Usage
 

@@ -13,7 +13,7 @@
 
 use sha2::{Digest, Sha256};
 
-use crate::pread::RangeOutput;
+use crate::output::RangeOutput;
 use crate::range::ReadRange;
 
 /// The SHA-256 checksum of one completed range output.
@@ -78,8 +78,9 @@ mod tests {
     use std::{env, fs, process};
 
     use super::{RangeChecksum, checksum};
+    use crate::output::RangeOutput;
     use crate::plan::ReadPlan;
-    use crate::pread::{RangeOutput, read_plan};
+    use crate::pread::read_plan;
     use crate::range::ReadRange;
 
     /// The NIST known-answer SHA-256 digest of the three bytes `abc`.
