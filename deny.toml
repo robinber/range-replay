@@ -1,5 +1,9 @@
 [graph]
 all-features = true
+# Workspace-member dev-dependencies are part of the checked graph by
+# default; pin that explicitly so test-only additions such as proptest stay
+# license- and advisory-checked even if the default ever changes.
+exclude-dev = false
 targets = [
     { triple = "aarch64-apple-darwin" },
     { triple = "x86_64-apple-darwin" },

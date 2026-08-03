@@ -3,11 +3,23 @@
 //! [`read_plan`] is the synchronous reference oracle; [`execute_pread`] is
 //! the budget-aware executor. For equal inputs the correctness contract
 //! requires identical logical outputs from both — the same canonical ranges
-//! in the same order, byte-for-byte equal payloads, and matching checksums —
-//! and agreement on failure when a range crosses end of file. The in-memory
-//! fixture bytes serve as a third, independent expectation on the success
-//! path, so a bug shared by both backends cannot hide behind their mutual
-//! agreement.
+//! in the same order with byte-for-byte equal payloads — and agreement on a
+//! typed end-of-file failure when the canonical plan crosses EOF. The
+//! in-memory fixture bytes serve as a third, independent expectation on the
+//! success path, so a bug shared by both backends cannot hide behind their
+//! mutual agreement.
+//!
+//! Checksum agreement is implied rather than asserted: the checksum is a
+//! deterministic function of the payload bytes alone, pinned by the
+//! known-answer tests in `src/checksum.rs`, so byte-for-byte equal outputs
+//! cannot produce unequal checksums and a separate assertion here would be
+//! vacuous.
+//!
+//! The suite observes logical outputs and terminal errors only, so it
+//! cannot see budget admission: an executor that admitted physical reads
+//! beyond the in-flight budget could still return correct bytes here. That
+//! hard admission invariant is owned by the scripted-session tests in
+//! `src/executor/tests.rs` and the limiter tests in `src/budget.rs`.
 //!
 //! Hand-calculated cases pin exact expectations; proptest cases sweep small
 //! random files, schedules, and configurations. A failing proptest input is
@@ -25,8 +37,8 @@ use std::{env, fs, process};
 use proptest::prelude::{Just, Strategy, any, proptest};
 use proptest::{collection, prop_compose};
 use range_replay::{
-    ByteBudget, ExecutionConfig, ExecutionPlan, RangeOutput, ReadPlan, ReadRange, ReadSize,
-    checksum, execute_pread, read_plan,
+    ByteBudget, ExecutionConfig, ExecutionPlan, PreadExecutionError, RangeOutput, ReadError,
+    ReadPlan, ReadRange, ReadSize, execute_pread, read_plan,
 };
 
 /// Distinguishes concurrently created fixture files within one process.
@@ -128,7 +140,6 @@ fn assert_backends_agree(data: &[u8], schedule: &[(u64, u64)], read_size: u64, b
             "payloads are byte-for-byte identical for range {:?}",
             oracle_output.range()
         );
-        assert_eq!(checksum(oracle_output), checksum(executed_output));
 
         let offset =
             usize::try_from(oracle_output.range().offset()).expect("test offsets fit in usize");
@@ -142,7 +153,13 @@ fn assert_backends_agree(data: &[u8], schedule: &[(u64, u64)], read_size: u64, b
     }
 }
 
-/// Asserts both backends reject a schedule whose canonical plan crosses EOF.
+/// Asserts both backends reject a plan crossing EOF with a typed EOF error.
+///
+/// Both sides must report the end-of-file condition itself — not merely any
+/// failure — so an executor that surfaced EOF as a scheduling, assembly, or
+/// stall error would be caught. The two error payloads are not compared:
+/// the oracle fails on a whole logical range while the executor fails on
+/// one physical read inside it.
 #[expect(
     clippy::expect_used,
     reason = "test helpers panic with diagnostics like the tests they serve"
@@ -160,13 +177,21 @@ fn assert_backends_agree_on_eof(
     let fixture = Fixture::new(data);
     let file = fs::File::open(&fixture.path).expect("fixture file opens");
 
+    let oracle_error = read_plan(&file, &plan).expect_err("the oracle rejects a plan crossing EOF");
     assert!(
-        read_plan(&file, &plan).is_err(),
-        "the oracle rejects a plan crossing EOF"
+        matches!(oracle_error, ReadError::UnexpectedEof { .. }),
+        "the oracle reports the EOF itself, not another failure: {oracle_error:?}"
     );
+
+    let executor_error =
+        execute_pread(&file, execution).expect_err("the executor rejects a plan crossing EOF");
     assert!(
-        execute_pread(&file, execution).is_err(),
-        "the executor rejects a plan crossing EOF"
+        matches!(
+            executor_error,
+            PreadExecutionError::Read(ReadError::UnexpectedEof { .. })
+        ),
+        "the executor reports the EOF through its read stage, not another failure: \
+         {executor_error:?}"
     );
 }
 
@@ -203,8 +228,18 @@ fn backends_agree_on_a_single_byte_file() {
 }
 
 #[test]
+fn backends_agree_when_a_range_splits_into_full_reads_and_a_tail() {
+    assert_backends_agree(b"0123456789abcdef", &[(0, 10)], 4, 6);
+}
+
+#[test]
 fn backends_agree_on_failure_for_the_hand_calculated_eof_schedule() {
     assert_backends_agree_on_eof(b"0123456789abcdef", &[(0, 4), (100, 4)], 4, 10);
+}
+
+#[test]
+fn backends_agree_on_failure_for_an_empty_file() {
+    assert_backends_agree_on_eof(&[], &[(0, 1)], 4, 10);
 }
 
 prop_compose! {
