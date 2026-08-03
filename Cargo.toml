@@ -102,3 +102,6 @@ panic = "abort"
 # Keep budget/offset arithmetic honest in release; prefer checked math at
 # boundaries either way.
 overflow-checks = true
+
+[dev-dependencies]
+proptest = { version = "1.11.0", default-features = false, features = ["std"] }
