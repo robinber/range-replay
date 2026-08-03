@@ -111,7 +111,8 @@ pub fn coalesce(ranges: &[ReadRange]) -> Result<Vec<ReadRange>, PlanError> {
 
 /// A canonical read plan whose construction invariants are established once.
 ///
-/// `ReadPlan` is the validated input boundary for later read backends. A bare
+/// `ReadPlan` is the validated input boundary for the read backends
+/// ([`read_plan`](crate::read_plan) borrows one directly). A bare
 /// `Vec<ReadRange>` cannot promise anything about its contents, so backends
 /// accepting one would have to re-check ordering and overlap on every call.
 /// A `ReadPlan` can only be built through [`ReadPlan::try_from_schedule`],
