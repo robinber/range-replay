@@ -3,6 +3,20 @@
 //! Every test spawns the compiled binary against small temporary fixtures and
 //! asserts the deterministic stdout contract, the fail-closed error contract,
 //! or both.
+//!
+//! The precedence tests assert which failure gets reported when several
+//! stages could fail: the typed cause on stderr plus the absence of both
+//! unusable paths proves reporting precedence. The stronger claim that no
+//! filesystem access happened at all is a property of the statement order
+//! in the binary's `execute`, confirmed by inspection, not observable from
+//! the process boundary.
+//!
+//! `ExecutionPlan` derivation failures have no CLI test: every
+//! `ExecutionPlanError` variant guards arithmetic that cannot overflow for
+//! inputs already validated by `ReadPlan` and `ReadSize`, or a fallible
+//! metadata allocation, so none is deterministically reachable through the
+//! binary without artificial production hooks. The library tests own those
+//! guards.
 #![expect(
     unused_crate_dependencies,
     reason = "the CLI is exercised through the compiled binary, not through library links"
@@ -14,6 +28,11 @@ use std::process::{Command, Output};
 use std::{env, fs, process};
 
 const DATA: &[u8] = b"0123456789abcdef";
+
+/// Default valid configuration used by tests that exercise behavior other
+/// than the configuration options themselves.
+const READ_SIZE: &str = "4";
+const BYTE_BUDGET: &str = "10";
 
 /// A temporary fixture file removed when the test ends.
 struct Fixture {
@@ -54,8 +73,21 @@ fn run_cli(args: &[&OsStr]) -> Output {
         .expect("the compiled binary runs")
 }
 
+/// Runs the binary with an explicit configuration and both file paths.
+fn run_configured(read_size: &str, byte_budget: &str, data: &Path, schedule: &Path) -> Output {
+    run_cli(&[
+        OsStr::new("--read-size"),
+        OsStr::new(read_size),
+        OsStr::new("--byte-budget"),
+        OsStr::new(byte_budget),
+        data.as_os_str(),
+        schedule.as_os_str(),
+    ])
+}
+
+/// Runs the binary with the default valid configuration.
 fn run_on(data: &Path, schedule: &Path) -> Output {
-    run_cli(&[data.as_os_str(), schedule.as_os_str()])
+    run_configured(READ_SIZE, BYTE_BUDGET, data, schedule)
 }
 
 #[expect(
@@ -67,13 +99,20 @@ fn stderr_text(output: &Output) -> String {
 }
 
 #[test]
-fn help_describes_both_positional_files() {
+fn help_describes_positional_files_and_required_byte_options() {
     let output = run_cli(&[OsStr::new("--help")]);
 
     let stdout = String::from_utf8(output.stdout).expect("help is UTF-8");
     assert!(output.status.success());
     assert!(stdout.contains("<DATA_FILE>"));
     assert!(stdout.contains("<SCHEDULE_FILE>"));
+    assert!(stdout.contains("--read-size <OCTETS>"));
+    assert!(stdout.contains("--byte-budget <OCTETS>"));
+    assert_eq!(
+        stdout.matches("decimal byte count").count(),
+        2,
+        "both options document their decimal byte contract"
+    );
 }
 
 #[test]
@@ -98,8 +137,118 @@ fn missing_arguments_fail_with_a_usage_diagnostic() {
 }
 
 #[test]
+fn omitting_read_size_fails_with_a_usage_diagnostic() {
+    let output = run_cli(&[
+        OsStr::new("--byte-budget"),
+        OsStr::new(BYTE_BUDGET),
+        OsStr::new("data"),
+        OsStr::new("schedule"),
+    ]);
+
+    let stderr = stderr_text(&output);
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(stderr.contains("Usage"));
+    assert!(stderr.contains("--read-size"));
+}
+
+#[test]
+fn omitting_byte_budget_fails_with_a_usage_diagnostic() {
+    let output = run_cli(&[
+        OsStr::new("--read-size"),
+        OsStr::new(READ_SIZE),
+        OsStr::new("data"),
+        OsStr::new("schedule"),
+    ]);
+
+    let stderr = stderr_text(&output);
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(stderr.contains("Usage"));
+    assert!(stderr.contains("--byte-budget"));
+}
+
+#[test]
+fn a_non_decimal_read_size_is_rejected_before_run() {
+    let output = run_cli(&[
+        OsStr::new("--read-size"),
+        OsStr::new("4KiB"),
+        OsStr::new("--byte-budget"),
+        OsStr::new("16384"),
+        OsStr::new("data"),
+        OsStr::new("schedule"),
+    ]);
+
+    let stderr = stderr_text(&output);
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(stderr.contains("invalid value '4KiB'"));
+    assert!(stderr.contains("--read-size"));
+}
+
+#[test]
+fn a_non_decimal_byte_budget_is_rejected_before_run() {
+    let output = run_cli(&[
+        OsStr::new("--read-size"),
+        OsStr::new("4"),
+        OsStr::new("--byte-budget"),
+        OsStr::new("0x10"),
+        OsStr::new("data"),
+        OsStr::new("schedule"),
+    ]);
+
+    let stderr = stderr_text(&output);
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(stderr.contains("invalid value '0x10'"));
+    assert!(stderr.contains("--byte-budget"));
+}
+
+#[test]
+fn a_value_outside_u64_is_rejected_before_run() {
+    let output = run_cli(&[
+        OsStr::new("--read-size"),
+        OsStr::new("18446744073709551616"),
+        OsStr::new("--byte-budget"),
+        OsStr::new("18446744073709551616"),
+        OsStr::new("data"),
+        OsStr::new("schedule"),
+    ]);
+
+    let stderr = stderr_text(&output);
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(stderr.contains("invalid value '18446744073709551616'"));
+}
+
+#[test]
 fn a_missing_schedule_argument_fails_with_a_usage_diagnostic() {
-    let output = run_cli(&[OsStr::new("only-one-path")]);
+    let output = run_cli(&[
+        OsStr::new("--read-size"),
+        OsStr::new(READ_SIZE),
+        OsStr::new("--byte-budget"),
+        OsStr::new(BYTE_BUDGET),
+        OsStr::new("only-one-path"),
+    ]);
+
+    let stderr = stderr_text(&output);
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(stderr.contains("Usage"));
+    assert!(stderr.contains("<SCHEDULE_FILE>"));
+}
+
+#[test]
+fn an_extra_argument_fails_with_a_usage_diagnostic() {
+    let output = run_cli(&[
+        OsStr::new("--read-size"),
+        OsStr::new(READ_SIZE),
+        OsStr::new("--byte-budget"),
+        OsStr::new(BYTE_BUDGET),
+        OsStr::new("a"),
+        OsStr::new("b"),
+        OsStr::new("c"),
+    ]);
 
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
@@ -107,12 +256,51 @@ fn a_missing_schedule_argument_fails_with_a_usage_diagnostic() {
 }
 
 #[test]
-fn an_extra_argument_fails_with_a_usage_diagnostic() {
-    let output = run_cli(&[OsStr::new("a"), OsStr::new("b"), OsStr::new("c")]);
+fn a_zero_read_size_takes_precedence_over_missing_data_and_schedule_paths() {
+    let missing_data = fixture_path("zero-read-size", "missing-data");
+    let missing_schedule = fixture_path("zero-read-size", "missing-schedule");
 
+    let output = run_configured("0", "10", &missing_data, &missing_schedule);
+
+    let stderr = stderr_text(&output);
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
-    assert!(stderr_text(&output).contains("Usage"));
+    assert!(stderr.contains("invalid --read-size value 0"));
+    assert!(stderr.contains("read size must be greater than zero"));
+    assert!(!stderr.contains(&missing_data.display().to_string()));
+    assert!(!stderr.contains(&missing_schedule.display().to_string()));
+}
+
+#[test]
+fn a_zero_byte_budget_takes_precedence_over_missing_data_and_schedule_paths() {
+    let missing_data = fixture_path("zero-byte-budget", "missing-data");
+    let missing_schedule = fixture_path("zero-byte-budget", "missing-schedule");
+
+    let output = run_configured("4", "0", &missing_data, &missing_schedule);
+
+    let stderr = stderr_text(&output);
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(stderr.contains("invalid --byte-budget value 0"));
+    assert!(stderr.contains("byte budget must be greater than zero"));
+    assert!(!stderr.contains(&missing_data.display().to_string()));
+    assert!(!stderr.contains(&missing_schedule.display().to_string()));
+}
+
+#[test]
+fn a_read_size_exceeding_the_budget_reports_the_exact_values_and_wins_over_missing_paths() {
+    let missing_data = fixture_path("oversized-read-size", "missing-data");
+    let missing_schedule = fixture_path("oversized-read-size", "missing-schedule");
+
+    let output = run_configured("16", "8", &missing_data, &missing_schedule);
+
+    let stderr = stderr_text(&output);
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(stderr.contains("invalid execution configuration"));
+    assert!(stderr.contains("read size of 16 bytes exceeds the byte budget of 8 bytes"));
+    assert!(!stderr.contains(&missing_data.display().to_string()));
+    assert!(!stderr.contains(&missing_schedule.display().to_string()));
 }
 
 #[test]
@@ -125,6 +313,26 @@ fn the_hand_calculated_fixture_prints_exact_canonical_output() {
     assert!(output.status.success());
     assert_eq!(output.stdout, b"2,3,323334\n10,4,61626364\n");
     assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn different_valid_configurations_produce_identical_logical_output() {
+    let data = Fixture::new("config-invariant", "data", DATA);
+    let schedule = Fixture::new("config-invariant", "schedule", b"10,4\n2,3\n");
+
+    for (read_size, byte_budget) in [("1", "1"), ("2", "5"), ("4", "10"), ("1024", "4096")] {
+        let output = run_configured(read_size, byte_budget, &data.path, &schedule.path);
+
+        assert!(
+            output.status.success(),
+            "configuration {read_size}/{byte_budget} succeeds"
+        );
+        assert_eq!(
+            output.stdout, b"2,3,323334\n10,4,61626364\n",
+            "configuration {read_size}/{byte_budget} preserves the logical output"
+        );
+        assert!(output.stderr.is_empty());
+    }
 }
 
 #[test]
@@ -196,7 +404,7 @@ fn an_empty_schedule_fails_before_the_backend_runs() {
 }
 
 #[test]
-fn a_later_range_crossing_eof_fails_closed_with_empty_stdout() {
+fn a_later_physical_read_crossing_eof_fails_closed_with_empty_stdout() {
     let data = Fixture::new("fail-closed", "data", DATA);
     let schedule = Fixture::new("fail-closed", "schedule", b"0,4\n100,4\n");
 
@@ -205,21 +413,25 @@ fn a_later_range_crossing_eof_fails_closed_with_empty_stdout() {
     let stderr = stderr_text(&output);
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
+    assert!(stderr.contains("cannot execute the physical plan"));
+    assert!(stderr.contains(&data.path.display().to_string()));
+    assert!(stderr.contains("executing one positioned read failed"));
     assert!(stderr.contains("unexpected end of file"));
 }
 
 #[test]
-fn a_missing_schedule_path_keeps_path_aware_context() {
-    let data = Fixture::new("missing-schedule", "data", DATA);
+fn a_missing_schedule_path_takes_precedence_over_a_missing_data_path() {
+    let missing_data = fixture_path("missing-schedule", "missing-data");
     let missing_schedule = fixture_path("missing-schedule", "missing");
 
-    let output = run_on(&data.path, &missing_schedule);
+    let output = run_on(&missing_data, &missing_schedule);
 
     let stderr = stderr_text(&output);
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
     assert!(stderr.contains("cannot read schedule file"));
     assert!(stderr.contains(&missing_schedule.display().to_string()));
+    assert!(!stderr.contains(&missing_data.display().to_string()));
 }
 
 #[test]
