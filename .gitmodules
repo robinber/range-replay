@@ -1,0 +1,3 @@
+[submodule ".agents/skills/rust-strict"]
+	path = .agents/skills/rust-strict
+	url = https://github.com/robinber/agent-skills-rust.git
