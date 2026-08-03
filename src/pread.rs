@@ -432,9 +432,8 @@ where
 #[cfg(test)]
 mod tests {
     use std::fs::File;
+    use std::io;
     use std::io::{ErrorKind, Seek, SeekFrom};
-    use std::path::PathBuf;
-    use std::{env, fs, io, process};
 
     use super::{ReadError, read_plan, read_range_exact, read_scheduled, read_scheduled_with};
     use crate::budget::ByteBudget;
@@ -453,21 +452,8 @@ mod tests {
         ReadPlan::try_from_schedule(schedule).expect("test schedules are not empty")
     }
 
-    fn fixture_path(test: &str) -> PathBuf {
-        env::temp_dir().join(format!("range-replay-pread-{test}-{}", process::id()))
-    }
-
     fn with_file_content<T>(test: &str, contents: &[u8], run: impl FnOnce(&mut File) -> T) -> T {
-        let path = fixture_path(test);
-        fs::write(&path, contents).expect("fixture file is writable");
-        let mut file = File::open(&path).expect("fixture file opens");
-
-        let result = run(&mut file);
-
-        drop(file);
-        fs::remove_file(&path).expect("fixture file is removable");
-
-        result
+        crate::test_support::with_file_content(&format!("pread-{test}"), contents, run)
     }
 
     fn with_fixture_file<T>(test: &str, run: impl FnOnce(&mut File) -> T) -> T {

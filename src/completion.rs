@@ -16,7 +16,9 @@
 //! operation of an execution plan, while a range output covers one complete
 //! canonical *logical* range. An
 //! [`OutputAssembler`](crate::OutputAssembler) assembles recorded
-//! completions into logical outputs; no executor drives that loop yet.
+//! completions into logical outputs, and
+//! [`execute_pread`](crate::execute_pread) drives that loop for the
+//! synchronous backend.
 
 use crate::range::ReadRange;
 use crate::scheduler::{OperationId, ScheduledRead};
@@ -60,8 +62,10 @@ pub(crate) struct LengthMismatch {
 ///
 /// A completion proves only that its own physical range was read exactly.
 /// Other admitted operations may still fail, so it is never proof that the
-/// whole plan executed successfully; only a future executor could decide
-/// that, and none exists yet.
+/// whole plan executed successfully; only an executor that watched every
+/// admitted operation finish can decide that, as
+/// [`execute_pread`](crate::execute_pread) does for the synchronous
+/// backend.
 ///
 /// Fields stay private and no public constructor exists, so a completion
 /// cannot be forged, mutated into a length mismatch, or detached from its

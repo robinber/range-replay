@@ -10,12 +10,15 @@ mod budget;
 mod checksum;
 mod completion;
 mod execution;
+mod executor;
 mod output;
 mod plan;
 mod pread;
 mod range;
 mod schedule;
 mod scheduler;
+#[cfg(test)]
+mod test_support;
 
 pub use crate::budget::{BudgetError, BudgetLimiter, ByteBudget, Reservation, ReservationError};
 pub use crate::checksum::{RangeChecksum, checksum};
@@ -24,6 +27,7 @@ pub use crate::execution::{
     ExecutionConfig, ExecutionConfigError, ExecutionPlan, ExecutionPlanError, PlannedRange,
     ReadSize, ReadSizeError,
 };
+pub use crate::executor::{PreadExecutionError, execute_pread};
 pub use crate::output::{AssemblyError, OutputAssembler, RangeOutput};
 pub use crate::plan::{PlanError, ReadPlan, coalesce};
 pub use crate::pread::{ReadError, read_plan, read_scheduled};

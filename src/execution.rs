@@ -43,7 +43,8 @@
 //! work; tracking and releasing the bytes actually in flight belongs to
 //! [`BudgetLimiter`](crate::BudgetLimiter), a
 //! [`Scheduler`](crate::Scheduler) selects and admits planned reads under
-//! the budget, and no executor or backend submits reads yet.
+//! the budget, and the synchronous executor
+//! [`execute_pread`](crate::execute_pread) submits them.
 
 use std::collections::TryReserveError;
 
@@ -154,7 +155,8 @@ impl ReadSize {
 /// requiring several threads — admission is accounting, not parallel
 /// execution, and a merely valid configuration promises only that one full
 /// read fits. A [`Scheduler`](crate::Scheduler) admits planned reads under
-/// the budget; no executor or backend submits them yet.
+/// the budget, and [`execute_pread`](crate::execute_pread) executes them
+/// synchronously.
 ///
 /// An invalid pairing is unrepresentable: `try_new` rejects a read size
 /// larger than the budget with the exact offending values instead of

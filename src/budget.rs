@@ -24,7 +24,8 @@
 //!
 //! This module is accounting only. Nothing here reads a file, allocates
 //! buffers, schedules work, waits, or queues; scheduling belongs to
-//! [`Scheduler`](crate::Scheduler), and execution remains a later slice.
+//! [`Scheduler`](crate::Scheduler), and the synchronous executor
+//! [`execute_pread`](crate::execute_pread) drives execution.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -75,8 +76,9 @@ pub enum ReservationError {
 /// Runtime enforcement exists as a primitive: a [`BudgetLimiter`] tracks the
 /// sum of bytes actually in flight and never admits beyond the limit. A
 /// [`Scheduler`](crate::Scheduler) acquires reservations for greedily
-/// selected physical reads through its own internal limiter; no executor or
-/// backend consumes them yet.
+/// selected physical reads through its own internal limiter, and the
+/// synchronous executor [`execute_pread`](crate::execute_pread) consumes
+/// them.
 ///
 /// # Examples
 ///
