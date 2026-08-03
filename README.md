@@ -97,9 +97,12 @@ valid configuration produces identical logical output for equal inputs.
 Any failure — an invalid configuration, an unreadable or invalid schedule, an
 empty plan, an unopenable data file, or an executor error such as reading
 past end of file — is reported on stderr with its full cause chain and a
-non-zero exit status, and stdout stays empty: no partial output is ever
-rendered for a failed run. An invalid configuration is rejected before any
-filesystem access.
+non-zero exit status, and stdout stays empty: rendering starts only after
+the whole plan has executed successfully. An invalid configuration is
+rejected before any filesystem access. The one boundary stdout cannot defend
+is a write failure of the already-complete output (for example a pipe closed
+mid-write): the run still exits non-zero with the failure on stderr, but
+bytes the stream already accepted cannot be retracted.
 
 The project is deliberately bounded. It is a Rust and Linux systems-learning
 exercise, not a production storage engine or a general-purpose async runtime.

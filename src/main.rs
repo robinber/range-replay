@@ -11,9 +11,13 @@
 //! [`ExecutionConfig`], and are checked before any filesystem I/O, so an
 //! invalid configuration wins deterministically over an unreadable path.
 //!
-//! The rendering contract is fail-closed: nothing reaches stdout unless the
-//! whole physical plan executed successfully through [`execute_pread`], so
-//! any domain output visible on stdout came from a completely successful run.
+//! The rendering contract is fail-closed up to rendering: stdout is acquired
+//! only after the whole physical plan executed successfully through
+//! [`execute_pread`], so every configuration, planning, file-open, and
+//! execution failure leaves stdout empty. Once rendering of the complete
+//! output has begun, a stdout write failure still exits non-zero with the
+//! failure on stderr, but bytes the stream already accepted cannot be
+//! retracted.
 #![expect(
     unused_crate_dependencies,
     reason = "`sha2` is used by the library target of this single-package application"

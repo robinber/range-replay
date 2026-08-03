@@ -4,6 +4,13 @@
 //! asserts the deterministic stdout contract, the fail-closed error contract,
 //! or both.
 //!
+//! The precedence tests assert which failure gets reported when several
+//! stages could fail: the typed cause on stderr plus the absence of both
+//! unusable paths proves reporting precedence. The stronger claim that no
+//! filesystem access happened at all is a property of the statement order
+//! in the binary's `execute`, confirmed by inspection, not observable from
+//! the process boundary.
+//!
 //! `ExecutionPlan` derivation failures have no CLI test: every
 //! `ExecutionPlanError` variant guards arithmetic that cannot overflow for
 //! inputs already validated by `ReadPlan` and `ReadSize`, or a fallible
@@ -215,6 +222,23 @@ fn a_value_outside_u64_is_rejected_before_run() {
 }
 
 #[test]
+fn a_missing_schedule_argument_fails_with_a_usage_diagnostic() {
+    let output = run_cli(&[
+        OsStr::new("--read-size"),
+        OsStr::new(READ_SIZE),
+        OsStr::new("--byte-budget"),
+        OsStr::new(BYTE_BUDGET),
+        OsStr::new("only-one-path"),
+    ]);
+
+    let stderr = stderr_text(&output);
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(stderr.contains("Usage"));
+    assert!(stderr.contains("<SCHEDULE_FILE>"));
+}
+
+#[test]
 fn an_extra_argument_fails_with_a_usage_diagnostic() {
     let output = run_cli(&[
         OsStr::new("--read-size"),
@@ -232,7 +256,7 @@ fn an_extra_argument_fails_with_a_usage_diagnostic() {
 }
 
 #[test]
-fn a_zero_read_size_reports_its_typed_cause_before_any_file_access() {
+fn a_zero_read_size_takes_precedence_over_missing_data_and_schedule_paths() {
     let missing_data = fixture_path("zero-read-size", "missing-data");
     let missing_schedule = fixture_path("zero-read-size", "missing-schedule");
 
@@ -248,7 +272,7 @@ fn a_zero_read_size_reports_its_typed_cause_before_any_file_access() {
 }
 
 #[test]
-fn a_zero_byte_budget_reports_its_typed_cause_before_any_file_access() {
+fn a_zero_byte_budget_takes_precedence_over_missing_data_and_schedule_paths() {
     let missing_data = fixture_path("zero-byte-budget", "missing-data");
     let missing_schedule = fixture_path("zero-byte-budget", "missing-schedule");
 
@@ -264,7 +288,7 @@ fn a_zero_byte_budget_reports_its_typed_cause_before_any_file_access() {
 }
 
 #[test]
-fn a_read_size_exceeding_the_budget_reports_the_exact_values_before_any_file_access() {
+fn a_read_size_exceeding_the_budget_reports_the_exact_values_and_wins_over_missing_paths() {
     let missing_data = fixture_path("oversized-read-size", "missing-data");
     let missing_schedule = fixture_path("oversized-read-size", "missing-schedule");
 
@@ -390,12 +414,13 @@ fn a_later_physical_read_crossing_eof_fails_closed_with_empty_stdout() {
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
     assert!(stderr.contains("cannot execute the physical plan"));
+    assert!(stderr.contains(&data.path.display().to_string()));
     assert!(stderr.contains("executing one positioned read failed"));
     assert!(stderr.contains("unexpected end of file"));
 }
 
 #[test]
-fn a_missing_schedule_path_is_reported_before_the_data_file_is_touched() {
+fn a_missing_schedule_path_takes_precedence_over_a_missing_data_path() {
     let missing_data = fixture_path("missing-schedule", "missing-data");
     let missing_schedule = fixture_path("missing-schedule", "missing");
 
