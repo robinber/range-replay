@@ -24,3 +24,22 @@
 /results/
 /benchmarks/output/
 /device-profiles/local/
+
+# Agent tooling state — keep pinned rust-strict skill tree
+.agents/*
+!.agents/skills/
+.agents/skills/*
+!.agents/skills/rust-strict/
+!.agents/skills/rust-strict/**
+
+.claude/*
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/rust-strict/
+!.claude/skills/rust-strict/**
+
+.grok/*
+!.grok/skills/
+.grok/skills/*
+!.grok/skills/rust-strict/
+!.grok/skills/rust-strict/**

@@ -8,9 +8,18 @@ to make the engineering and verification contracts explicit.
 
 1. This file — repository-wide agent rules.
 2. [`README.md`](README.md) — product scope, correctness boundary, and non-goals.
-3. [`.agents/skills/rust-strict/SKILL.md`](.agents/skills/rust-strict/SKILL.md)
-   — required before changing, reviewing, debugging, or claiming verification
-   for Rust or Cargo work.
+3. Shared Rust skill **rust-strict** (v1.1.0+) before any Rust change, review,
+   debugging, or verification claim. One canonical checkout; Claude/Grok paths
+   are symlinks:
+
+   | Tool | Path |
+   | --- | --- |
+   | Codex (canonical submodule) | [`.agents/skills/rust-strict/SKILL.md`](.agents/skills/rust-strict/SKILL.md) |
+   | Claude Code | [`.claude/skills/rust-strict/SKILL.md`](.claude/skills/rust-strict/SKILL.md) → symlink |
+   | Grok | [`.grok/skills/rust-strict/SKILL.md`](.grok/skills/rust-strict/SKILL.md) → symlink |
+
+   Source: https://github.com/robinber/agent-skills-rust (pin tag, currently
+   `v1.1.0`).
 4. Rust policy files: [`Cargo.toml`](Cargo.toml),
    [`rust-toolchain.toml`](rust-toolchain.toml),
    [`.cargo/config.toml`](.cargo/config.toml),
