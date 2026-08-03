@@ -28,9 +28,10 @@
 //! [`ScheduledRead`] releases its exact bytes so a retry can succeed.
 //! [`ScheduleDecision::Exhausted`] means the scheduler has nothing left to
 //! distribute — live handles may still exist, so exhaustion is *not*
-//! global completion. A future executor owns backend invocation,
-//! completion supervision, and the final finished state; nothing here
-//! reads a file, allocates a buffer, or sees an I/O result.
+//! global completion. The executor ([`execute_pread`](crate::execute_pread))
+//! owns backend invocation, completion supervision, and the final finished
+//! state; nothing here reads a file, allocates a buffer, or sees an I/O
+//! result.
 //!
 //! Scheduler state stays compact: construction and retained metadata are
 //! proportional to the number of logical [`PlannedRange`] entries, never to
@@ -54,7 +55,7 @@ use crate::range::ReadRange;
 /// Temporary budget pressure is never an error; it is the non-mutating
 /// [`ScheduleDecision::WaitingForBudget`] decision. Backend and I/O
 /// failures have no variant here because the scheduler never sees bytes;
-/// those belong to the future executor and backend boundary.
+/// those belong to the executor and backend boundary.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub enum SchedulerError {
     /// The compact progress allocation for the logical ranges could not be
@@ -223,8 +224,9 @@ pub enum ScheduleDecision {
     WaitingForBudget,
     /// No pending physical operation remains to distribute. Live
     /// [`ScheduledRead`] handles may still exist, so exhaustion is not
-    /// execution completion; only a future executor can declare global
-    /// success after every admitted read finished.
+    /// execution completion; only an executor can declare global success
+    /// after every admitted read finished, as
+    /// [`execute_pread`](crate::execute_pread) does.
     Exhausted,
 }
 
@@ -453,7 +455,7 @@ impl Scheduler {
     /// live [`ScheduledRead`] is what makes a retry able to succeed. Once
     /// nothing is pending, every further call returns
     /// [`ScheduleDecision::Exhausted`], which only ends distribution: live
-    /// handles may still be executing under a future executor.
+    /// handles may still be executing under an executor.
     ///
     /// # Errors
     ///

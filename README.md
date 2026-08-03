@@ -55,12 +55,26 @@ exposes `RangeOutput` values only after every logical byte was recorded —
 finalization moves buffers into plan-order outputs without recopying.
 Completions must come from the scheduler run paired with the prepared
 plan; two independent runs over byte-for-byte identical plans are not
-distinguished, and a duplicate from such a run that still fits the
-remaining count double-counts progress undetected (cross-run provenance
-is future executor work). All of this
-stays library-only — the CLI invocation and output are unchanged. No
-executor loop drives schedule/submit/complete/drain, and no backend
-selection or `io_uring` backend exists yet.
+distinguished at this level, and a duplicate from such a run that still
+fits the remaining count double-counts progress undetected.
+
+A synchronous `pread` executor (`execute_pread`) now drives the
+budget-aware physical plan end to end: it consumes one `ExecutionPlan`,
+borrows one open `File`, owns one private non-clonable backend session,
+and drives scheduling, submission, completion, and assembly to global
+success, returning plan-order `RangeOutput` values only once the scheduler
+is exhausted, no operation remains active, and every logical byte was
+assembled (exhaustion alone is never success). Any failure after work was
+admitted is fail-closed: new submissions stop, the session is drained,
+every reservation releases through RAII, the primary typed
+`PreadExecutionError` is preserved — including alongside an additional
+drainage failure — and no partial output is observable. Because the
+scheduler, session, and assembler of a run stay encapsulated together,
+the high-level path cannot mix completions from two independent runs; the
+internal backend-session trait and generic driver stay private. All of
+this stays library-only — the CLI still uses its existing `read_plan`
+path, its invocation and output are unchanged, and no backend selection
+or `io_uring` backend exists yet.
 
 ## Usage
 

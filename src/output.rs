@@ -33,8 +33,11 @@
 //! assembler was prepared from. Completions from a *different* plan are
 //! rejected by the expected/actual range comparison, but two independent
 //! runs built from byte-for-byte identical plans are indistinguishable
-//! here; cross-run provenance is future executor/session work and is
-//! deliberately not claimed. The compact `remaining_bytes` counter guards
+//! here; cross-run provenance is deliberately not claimed — the high-level
+//! [`execute_pread`](crate::execute_pread) prevents mixing by keeping one
+//! run's scheduler, session, and assembler encapsulated, while direct
+//! low-level pairing stays the caller's obligation. The compact
+//! `remaining_bytes` counter guards
 //! its own arithmetic only: a cross-run duplicate that still fits the
 //! remaining count double-counts progress undetected, which is why the
 //! same-run pairing requirement is a hard precondition rather than an
@@ -46,9 +49,10 @@
 //! bytes and without allocating beyond the capacity reserved at
 //! construction. [`OutputAssembler::is_complete`] means only that
 //! every logical byte was integrated — it is not global execution success,
-//! which only a future executor loop over scheduler and backend could
-//! decide. No such executor exists yet, and nothing here schedules work,
-//! reads a file, or chooses a backend.
+//! which only an executor loop over scheduler and backend can decide, as
+//! [`execute_pread`](crate::execute_pread) does for the synchronous
+//! backend. Nothing here schedules work, reads a file, or chooses a
+//! backend.
 
 use std::collections::TryReserveError;
 use std::num::TryFromIntError;
@@ -400,7 +404,10 @@ fn destination_span(
 /// structurally excluded — the scheduler returns each operation once and
 /// one completion consumes it — while completions from an independent run
 /// over a byte-for-byte identical plan cannot be distinguished; cross-run
-/// provenance is future executor work and is not claimed here. Violating
+/// provenance is not claimed here —
+/// [`execute_pread`](crate::execute_pread) prevents mixing by
+/// encapsulation, and direct low-level pairing stays the caller's
+/// obligation. Violating
 /// the pairing precondition can silently corrupt assembly: a duplicate
 /// whose length still fits the remaining count double-counts progress and
 /// can complete a range whose other bytes were never recorded.
@@ -408,7 +415,8 @@ fn destination_span(
 /// [`Self::is_complete`] and a successful [`Self::finish`] mean only that
 /// every logical byte was integrated. Neither implies the scheduler is
 /// exhausted, no backend work remains, or the execution globally
-/// succeeded; a future executor decides those separately.
+/// succeeded; an executor such as [`execute_pread`](crate::execute_pread)
+/// decides those separately.
 ///
 /// # Examples
 ///
@@ -684,8 +692,6 @@ impl OutputAssembler {
 #[cfg(test)]
 mod tests {
     use std::fs::File;
-    use std::path::PathBuf;
-    use std::{env, fs, process};
 
     use super::{
         AssemblyError, OutputAssembler, destination_span, try_reserve_outputs, try_reserve_state,
@@ -737,17 +743,9 @@ mod tests {
     }
 
     fn with_file_content<T>(test: &str, contents: &[u8], run: impl FnOnce(&File) -> T) -> T {
-        let path: PathBuf =
-            env::temp_dir().join(format!("range-replay-output-{test}-{}", process::id()));
-        fs::write(&path, contents).expect("fixture file is writable");
-        let file = File::open(&path).expect("fixture file opens");
-
-        let result = run(&file);
-
-        drop(file);
-        fs::remove_file(&path).expect("fixture file is removable");
-
-        result
+        crate::test_support::with_file_content(&format!("output-{test}"), contents, |file| {
+            run(file)
+        })
     }
 
     #[test]

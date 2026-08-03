@@ -36,6 +36,9 @@ silently choose the interpretation that permits more work.
     checksum.rs  deterministic per-range SHA-256 checksums
     completion.rs backend-neutral exact completion of one admitted physical read (`CompletedRead`)
     execution.rs read-size-derived physical planning (`ReadSize`, `ExecutionConfig`, `ExecutionPlan`)
+    executor.rs  fail-closed synchronous pread execution over a private backend
+                 session (`execute_pread`, `PreadExecutionError`); its tests and
+                 scripted fake session live in executor/tests.rs
     output.rs    logical outputs assembled from physical completions (`RangeOutput`, `OutputAssembler`)
     plan.rs      pure planning over range collections (coalescing, `ReadPlan`)
     pread.rs     synchronous positioned-read reference backend (`read_plan`, `read_scheduled`)
@@ -43,6 +46,7 @@ silently choose the interpretation that permits more work.
     schedule.rs  textual schedule parsing (`offset,length` lines)
     scheduler.rs budget-aware greedy selection of pending physical reads
                  (`Scheduler`, `ScheduledRead`, `ScheduleDecision`, `OperationId`)
+    test_support.rs shared cfg(test) temporary-file fixture helper
     main.rs      thin binary entrypoint
   ```
 
