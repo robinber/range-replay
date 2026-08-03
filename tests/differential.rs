@@ -4,10 +4,12 @@
 //! the budget-aware executor. For equal inputs the correctness contract
 //! requires identical logical outputs from both — the same canonical ranges
 //! in the same order with byte-for-byte equal payloads — and agreement on a
-//! typed end-of-file failure when the canonical plan crosses EOF. The
-//! in-memory fixture bytes serve as a third, independent expectation on the
-//! success path, so a bug shared by both backends cannot hide behind their
-//! mutual agreement.
+//! typed end-of-file failure when the canonical plan crosses EOF. Each
+//! output sequence is compared against the canonical plan itself, not only
+//! against the other backend, so a regression shared by both — omitting,
+//! duplicating, or identically reordering canonical ranges — cannot pass on
+//! mutual agreement alone. The in-memory fixture bytes serve as a further
+//! independent expectation for every payload on the success path.
 //!
 //! Checksum agreement is implied rather than asserted: the checksum is a
 //! deterministic function of the payload bytes alone, pinned by the
@@ -93,7 +95,8 @@ fn config(read_size: u64, byte_budget: u64) -> ExecutionConfig {
     .expect("test read sizes fit under test budgets")
 }
 
-/// Runs both backends over one fixture and returns their outputs.
+/// Runs both backends over one fixture and returns the canonical plan next
+/// to their outputs.
 #[expect(
     clippy::expect_used,
     reason = "test helpers panic with diagnostics like the tests they serve"
@@ -103,7 +106,7 @@ fn run_both_backends(
     schedule: &[(u64, u64)],
     read_size: u64,
     byte_budget: u64,
-) -> (Vec<RangeOutput>, Vec<RangeOutput>) {
+) -> (ReadPlan, Vec<RangeOutput>, Vec<RangeOutput>) {
     let plan = ReadPlan::try_from_schedule(&ranges(schedule)).expect("test schedules are valid");
     let execution = ExecutionPlan::try_from_read_plan(&plan, config(read_size, byte_budget))
         .expect("valid plans and configurations derive a physical plan");
@@ -115,25 +118,39 @@ fn run_both_backends(
     let executed =
         execute_pread(&file, execution).expect("the executor reads in-bounds test ranges");
 
-    (oracle, executed)
+    (plan, oracle, executed)
 }
 
-/// Asserts full agreement between both backends and the in-memory truth.
+/// Asserts full agreement between both backends, the canonical plan, and
+/// the in-memory truth.
+///
+/// The canonical plan is the structural expectation: each backend must
+/// return exactly one output per canonical range, in plan order. Comparing
+/// both sequences against the plan — not only against each other — catches
+/// a shared regression that omits, duplicates, or identically reorders
+/// canonical ranges.
 #[expect(
     clippy::expect_used,
     reason = "test helpers panic with diagnostics like the tests they serve"
 )]
 fn assert_backends_agree(data: &[u8], schedule: &[(u64, u64)], read_size: u64, byte_budget: u64) {
-    let (oracle, executed) = run_both_backends(data, schedule, read_size, byte_budget);
+    let (plan, oracle, executed) = run_both_backends(data, schedule, read_size, byte_budget);
 
+    let oracle_ranges: Vec<ReadRange> = oracle.iter().map(RangeOutput::range).collect();
     assert_eq!(
-        oracle.len(),
-        executed.len(),
-        "both backends produce one output per canonical range"
+        oracle_ranges,
+        plan.ranges(),
+        "the oracle returns exactly the canonical ranges in plan order"
+    );
+
+    let executed_ranges: Vec<ReadRange> = executed.iter().map(RangeOutput::range).collect();
+    assert_eq!(
+        executed_ranges,
+        plan.ranges(),
+        "the executor returns exactly the canonical ranges in plan order"
     );
 
     for (oracle_output, executed_output) in oracle.iter().zip(&executed) {
-        assert_eq!(oracle_output.range(), executed_output.range());
         assert_eq!(
             oracle_output.bytes(),
             executed_output.bytes(),
@@ -197,7 +214,8 @@ fn assert_backends_agree_on_eof(
 
 #[test]
 fn backends_agree_on_the_hand_calculated_fixture() {
-    let (oracle, executed) = run_both_backends(b"0123456789abcdef", &[(10, 4), (2, 3)], 4, 10);
+    let (_plan, oracle, executed) =
+        run_both_backends(b"0123456789abcdef", &[(10, 4), (2, 3)], 4, 10);
 
     let expected: Vec<(u64, u64, &[u8])> = vec![(2, 3, b"234"), (10, 4, b"abcd")];
     for outputs in [&oracle, &executed] {
