@@ -12,37 +12,19 @@ use crate::execution::{ExecutionConfig, ExecutionPlan, ReadSize};
 use crate::output::{AssemblyError, RangeOutput};
 use crate::plan::ReadPlan;
 use crate::pread::{ReadError, read_plan};
-use crate::range::ReadRange;
-use crate::scheduler::{ScheduleDecision, ScheduledRead, Scheduler};
-use crate::test_support::with_file_content;
+use crate::scheduler::ScheduledRead;
+use crate::test_support::{
+    BDAC_FIXTURE, HEX_FIXTURE, execution, ready, scheduler_for, span, with_file_content,
+};
 
-/// The hand-calculated fixture source: `[0, 14)` at read size 4 under a
-/// 10-byte budget splits into A `[0, 4)`, B `[4, 8)`, C `[8, 12)`, and the
-/// tail D `[12, 14)`.
-const FIXTURE: &[u8] = b"abcdefghijklmn";
-
-/// One operation identity as the plain index pair of its [`OperationId`],
-/// because tests cannot construct the real identity type.
+/// One operation identity as the plain index pair of its `OperationId`,
+/// because `OperationId::new` is private to the scheduler module.
 type Op = (usize, u64);
 
 const A: Op = (0, 0);
 const B: Op = (0, 1);
 const C: Op = (0, 2);
 const D: Op = (0, 3);
-
-fn span(start: u64, end: u64) -> ReadRange {
-    ReadRange::try_new(start, end - start).expect("test spans are valid ranges")
-}
-
-fn execution(schedule: &[ReadRange], read_size_bytes: u64, budget_bytes: u64) -> ExecutionPlan {
-    let plan = ReadPlan::try_from_schedule(schedule).expect("test schedules are not empty");
-    let read_size = ReadSize::try_new(read_size_bytes).expect("test read sizes are non-zero");
-    let budget = ByteBudget::try_new(budget_bytes).expect("test budgets are non-zero");
-    let config = ExecutionConfig::try_new(read_size, budget)
-        .expect("test configurations pair a read size with a large enough budget");
-
-    ExecutionPlan::try_from_read_plan(&plan, config).expect("test plans derive without failure")
-}
 
 fn bdac_plan() -> ExecutionPlan {
     execution(&[span(0, 14)], 4, 10)
@@ -127,7 +109,7 @@ fn complete_from_fixture(scheduled: ScheduledRead) -> CompletedRead {
     let start = usize::try_from(range.offset()).expect("fixture offsets fit in usize");
     let end = usize::try_from(range.end()).expect("fixture ends fit in usize");
 
-    CompletedRead::try_new(FIXTURE[start..end].to_vec(), scheduled)
+    CompletedRead::try_new(BDAC_FIXTURE[start..end].to_vec(), scheduled)
         .expect("fixture bytes cover the admitted range exactly")
 }
 
@@ -228,17 +210,10 @@ impl BackendSession for FakeSession {
 /// A valid completion of an unrelated run over a different plan, used to
 /// force an assembly failure inside the driver.
 fn foreign_completion() -> CompletedRead {
-    let mut scheduler = Scheduler::try_new(execution(&[span(20, 24)], 4, 4))
-        .expect("test schedulers construct without failure");
+    let mut scheduler = scheduler_for(execution(&[span(20, 24)], 4, 4));
 
-    match scheduler
-        .schedule_next()
-        .expect("test scheduling decisions succeed")
-    {
-        ScheduleDecision::Ready(admitted) => CompletedRead::try_new(b"wxyz".to_vec(), admitted)
-            .expect("four bytes cover the four-byte foreign range"),
-        decision => panic!("expected a ready decision, got {decision:?}"),
-    }
+    CompletedRead::try_new(b"wxyz".to_vec(), ready(&mut scheduler))
+        .expect("four bytes cover the four-byte foreign range")
 }
 
 type FakeResult = Result<Vec<RangeOutput>, DriverFailure<FakeFailure>>;
@@ -295,7 +270,7 @@ fn the_bdac_completion_order_produces_the_exact_logical_bytes() {
     let outputs = result.expect("the scripted run succeeds");
     assert_eq!(outputs.len(), 1);
     assert_eq!(outputs[0].range(), span(0, 14));
-    assert_eq!(outputs[0].bytes(), FIXTURE);
+    assert_eq!(outputs[0].bytes(), BDAC_FIXTURE);
 }
 
 #[test]
@@ -340,7 +315,7 @@ fn scheduler_exhaustion_does_not_finish_while_completions_remain_active() {
     );
 
     let outputs = result.expect("the scripted run succeeds");
-    assert_eq!(outputs[0].bytes(), FIXTURE);
+    assert_eq!(outputs[0].bytes(), BDAC_FIXTURE);
 }
 
 #[test]
@@ -611,11 +586,9 @@ fn a_failing_drain_is_preserved_alongside_the_primary_failure() {
     assert!(state.borrow().active.is_empty());
 }
 
-const REAL: &[u8] = b"0123456789abcdef";
-
 #[test]
 fn execute_pread_returns_exact_outputs_for_canonical_ranges() {
-    with_file_content("executor-success", REAL, |file| {
+    with_file_content("executor-success", HEX_FIXTURE, |file| {
         let single = execute_pread(file, execution(&[span(2, 5)], 4, 4))
             .expect("the range is inside the fixture");
         assert_eq!(single.len(), 1);
@@ -634,19 +607,19 @@ fn execute_pread_returns_exact_outputs_for_canonical_ranges() {
 
 #[test]
 fn the_bdac_fixture_executes_through_the_real_session_under_backpressure() {
-    with_file_content("executor-bdac", FIXTURE, |file| {
+    with_file_content("executor-bdac", BDAC_FIXTURE, |file| {
         let outputs =
             execute_pread(file, bdac_plan()).expect("the whole fixture range is readable");
 
         assert_eq!(outputs.len(), 1);
         assert_eq!(outputs[0].range(), span(0, 14));
-        assert_eq!(outputs[0].bytes(), FIXTURE);
+        assert_eq!(outputs[0].bytes(), BDAC_FIXTURE);
     });
 }
 
 #[test]
 fn execute_pread_matches_the_read_plan_reference() {
-    with_file_content("executor-parity", REAL, |file| {
+    with_file_content("executor-parity", HEX_FIXTURE, |file| {
         let plan = ReadPlan::try_from_schedule(&[span(10, 14), span(2, 5)])
             .expect("test schedules are not empty");
         let reference = read_plan(file, &plan).expect("the reference backend succeeds");
@@ -702,7 +675,7 @@ fn a_later_operation_failure_exposes_no_earlier_output() {
 
 #[test]
 fn the_borrowed_file_stays_usable_with_an_unchanged_cursor() {
-    with_file_content("executor-cursor", REAL, |file| {
+    with_file_content("executor-cursor", HEX_FIXTURE, |file| {
         file.seek(SeekFrom::Start(7)).expect("fixture file seeks");
 
         let outputs = execute_pread(file, execution(&[span(2, 5)], 4, 4))
@@ -723,7 +696,7 @@ fn the_borrowed_file_stays_usable_with_an_unchanged_cursor() {
 
 #[test]
 fn outputs_outlive_the_consumed_plan_and_the_borrowed_file() {
-    let outputs = with_file_content("executor-consumed", REAL, |file| {
+    let outputs = with_file_content("executor-consumed", HEX_FIXTURE, |file| {
         execute_pread(file, execution(&[span(0, 4)], 4, 4))
             .expect("the range is inside the fixture")
     });

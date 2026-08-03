@@ -436,47 +436,10 @@ mod tests {
     use std::io::{ErrorKind, Seek, SeekFrom};
 
     use super::{ReadError, read_plan, read_range_exact, read_scheduled, read_scheduled_with};
-    use crate::budget::ByteBudget;
-    use crate::execution::{ExecutionConfig, ExecutionPlan, ReadSize};
-    use crate::plan::ReadPlan;
-    use crate::range::ReadRange;
-    use crate::scheduler::{ScheduleDecision, ScheduledRead, Scheduler};
-
-    const FIXTURE: &[u8] = b"0123456789abcdef";
-
-    fn range(offset: u64, length: u64) -> ReadRange {
-        ReadRange::try_new(offset, length).expect("test ranges are valid")
-    }
-
-    fn plan(schedule: &[ReadRange]) -> ReadPlan {
-        ReadPlan::try_from_schedule(schedule).expect("test schedules are not empty")
-    }
-
-    fn with_file_content<T>(test: &str, contents: &[u8], run: impl FnOnce(&mut File) -> T) -> T {
-        crate::test_support::with_file_content(&format!("pread-{test}"), contents, run)
-    }
+    use crate::test_support::{HEX_FIXTURE, admitted_single, plan, range, with_file_content};
 
     fn with_fixture_file<T>(test: &str, run: impl FnOnce(&mut File) -> T) -> T {
-        with_file_content(test, FIXTURE, run)
-    }
-
-    fn admitted_single(offset: u64, length: u64, budget_bytes: u64) -> (Scheduler, ScheduledRead) {
-        let read_size = ReadSize::try_new(length).expect("test read sizes are non-zero");
-        let budget = ByteBudget::try_new(budget_bytes).expect("test budgets are non-zero");
-        let config = ExecutionConfig::try_new(read_size, budget)
-            .expect("test configurations pair a read size with a large enough budget");
-        let execution = ExecutionPlan::try_from_read_plan(&plan(&[range(offset, length)]), config)
-            .expect("test plans derive without failure");
-        let mut scheduler =
-            Scheduler::try_new(execution).expect("test schedulers construct without failure");
-
-        match scheduler
-            .schedule_next()
-            .expect("test scheduling decisions succeed")
-        {
-            ScheduleDecision::Ready(read) => (scheduler, read),
-            decision => panic!("expected a ready decision, got {decision:?}"),
-        }
+        with_file_content(test, HEX_FIXTURE, run)
     }
 
     #[test]

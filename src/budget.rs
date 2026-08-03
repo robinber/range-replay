@@ -131,11 +131,13 @@ impl ByteBudget {
 ///   total limit and can never be admitted by this limiter. The state is
 ///   unchanged.
 ///
-/// A future backend must obtain the reservation *before* allocating a
-/// per-read buffer or submitting the read: if allocation or submission then
-/// fails, dropping the already-created guard restores the capacity. That
-/// ordering is documentation for now — no buffer or backend integration
-/// exists yet.
+/// A backend must obtain the reservation *before* allocating a per-read
+/// buffer or submitting the read: if allocation or submission then fails,
+/// dropping the already-created guard restores the capacity. The synchronous
+/// backend practices exactly that ordering —
+/// [`read_scheduled`](crate::read_scheduled) allocates its per-read buffer
+/// only after the admission exists, and
+/// [`execute_pread`](crate::execute_pread) submits under it.
 ///
 /// The limiter stays usable while any number of reservations are alive, and
 /// it deliberately uses no locking: the runtime state is single-threaded by
@@ -316,25 +318,12 @@ impl Drop for Reservation {
 #[cfg(test)]
 mod tests {
     use super::{BudgetError, BudgetLimiter, ByteBudget, Reservation, ReservationError};
-    use crate::execution::{ExecutionConfig, ExecutionPlan, ReadSize};
-    use crate::plan::ReadPlan;
+    use crate::execution::ExecutionPlan;
     use crate::range::ReadRange;
-
-    fn span(start: u64, end: u64) -> ReadRange {
-        ReadRange::try_new(start, end - start).expect("test spans are valid ranges")
-    }
+    use crate::test_support::{execution, span};
 
     fn budget(bytes: u64) -> ByteBudget {
         ByteBudget::try_new(bytes).expect("test budgets are non-zero")
-    }
-
-    fn execution(schedule: &[ReadRange], read_size_bytes: u64, budget_bytes: u64) -> ExecutionPlan {
-        let plan = ReadPlan::try_from_schedule(schedule).expect("test schedules are not empty");
-        let read_size = ReadSize::try_new(read_size_bytes).expect("test read sizes are non-zero");
-        let config = ExecutionConfig::try_new(read_size, budget(budget_bytes))
-            .expect("test configurations pair a read size with a large enough budget");
-
-        ExecutionPlan::try_from_read_plan(&plan, config).expect("test plans derive without failure")
     }
 
     fn planned_read(execution: &ExecutionPlan, operation_index: u64) -> ReadRange {

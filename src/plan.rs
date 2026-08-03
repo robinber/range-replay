@@ -1,8 +1,9 @@
 //! Pure planning transformations over collections of read ranges.
 //!
 //! Planning turns a caller's logical schedule into a canonical plan. It stays
-//! deterministic and synchronous, and it never touches a file: file sizes, EOF,
-//! buffers, and backends belong to later slices.
+//! deterministic and synchronous, and it never touches a file: file sizes,
+//! EOF, buffers, and backend execution belong to the read backends
+//! ([`read_plan`](crate::read_plan), [`execute_pread`](crate::execute_pread)).
 //!
 //! The validated boundary type is [`ReadPlan`]; [`coalesce`] is the pure merge
 //! used to build it.
@@ -41,8 +42,9 @@ pub enum PlanError {
 ///
 /// The returned `Vec<ReadRange>` is canonical, but its type proves nothing: an
 /// arbitrary vector looks the same. [`ReadPlan::try_from_schedule`] wraps this
-/// same transformation in the validated boundary type that later backends will
-/// accept; prefer it whenever the invariants must travel with the value.
+/// same transformation in the validated boundary type the backends accept
+/// ([`read_plan`](crate::read_plan) borrows one directly); prefer it whenever
+/// the invariants must travel with the value.
 ///
 /// Two ranges merge when `current.offset() <= last.end()`, which covers overlap
 /// and exact adjacency in one comparison because the bounds are half-open. A
@@ -109,7 +111,8 @@ pub fn coalesce(ranges: &[ReadRange]) -> Result<Vec<ReadRange>, PlanError> {
 
 /// A canonical read plan whose construction invariants are established once.
 ///
-/// `ReadPlan` is the validated input boundary for later read backends. A bare
+/// `ReadPlan` is the validated input boundary for the read backends
+/// ([`read_plan`](crate::read_plan) borrows one directly). A bare
 /// `Vec<ReadRange>` cannot promise anything about its contents, so backends
 /// accepting one would have to re-check ordering and overlap on every call.
 /// A `ReadPlan` can only be built through [`ReadPlan::try_from_schedule`],
@@ -191,10 +194,7 @@ fn merged_range(offset: u64, end: u64) -> Result<ReadRange, PlanError> {
 mod tests {
     use super::{PlanError, ReadPlan, coalesce};
     use crate::range::ReadRange;
-
-    fn span(start: u64, end: u64) -> ReadRange {
-        ReadRange::try_new(start, end - start).expect("test spans are valid ranges")
-    }
+    use crate::test_support::span;
 
     fn bounds(plan: &[ReadRange]) -> Vec<(u64, u64)> {
         plan.iter()

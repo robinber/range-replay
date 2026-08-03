@@ -149,11 +149,8 @@ pub fn parse_schedule(input: &str) -> Result<Vec<ReadRange>, ScheduleError> {
 #[cfg(test)]
 mod tests {
     use super::{ScheduleError, parse_schedule};
-    use crate::range::{RangeError, ReadRange};
-
-    fn range(offset: u64, length: u64) -> ReadRange {
-        ReadRange::try_new(offset, length).expect("test ranges are valid")
-    }
+    use crate::range::RangeError;
+    use crate::test_support::range;
 
     #[test]
     fn parse_schedule_accepts_a_single_line() {

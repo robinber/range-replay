@@ -20,12 +20,11 @@ allow = [
     "Apache-2.0",
     "MIT",
     "Unicode-3.0",
-    "Unlicense",
 ]
 confidence-threshold = 0.9
-# Warn until third-party crates exercise the allow-list; tighten back to
-# "deny" once the dependency graph is non-empty and stable.
-unused-allowed-license = "warn"
+# The dependency graph is non-empty and pinned, so every allowance must be
+# exercised by an actual dependency.
+unused-allowed-license = "deny"
 
 [bans]
 multiple-versions = "warn"

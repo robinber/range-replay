@@ -73,15 +73,11 @@ pub fn checksum(output: &RangeOutput) -> RangeChecksum {
 
 #[cfg(test)]
 mod tests {
-    use std::fs::File;
-    use std::path::PathBuf;
-    use std::{env, fs, process};
-
     use super::{RangeChecksum, checksum};
     use crate::output::RangeOutput;
-    use crate::plan::ReadPlan;
     use crate::pread::read_plan;
     use crate::range::ReadRange;
+    use crate::test_support::{plan, range, with_file_content};
 
     /// The NIST known-answer SHA-256 digest of the three bytes `abc`.
     const ABC_SHA256: [u8; 32] = [
@@ -90,27 +86,11 @@ mod tests {
         0x15, 0xad,
     ];
 
-    fn range(offset: u64, length: u64) -> ReadRange {
-        ReadRange::try_new(offset, length).expect("test ranges are valid")
-    }
-
-    fn fixture_path(test: &str) -> PathBuf {
-        env::temp_dir().join(format!("range-replay-checksum-{test}-{}", process::id()))
-    }
-
     /// Produces real backend outputs for `ranges` over a file holding `data`.
     fn outputs_from_fixture(test: &str, data: &[u8], ranges: &[ReadRange]) -> Vec<RangeOutput> {
-        let path = fixture_path(test);
-        fs::write(&path, data).expect("fixture file is writable");
-        let file = File::open(&path).expect("fixture file opens");
-
-        let plan = ReadPlan::try_from_schedule(ranges).expect("test schedules are not empty");
-        let outputs = read_plan(&file, &plan).expect("test ranges are inside the fixture");
-
-        drop(file);
-        fs::remove_file(&path).expect("fixture file is removable");
-
-        outputs
+        with_file_content(test, data, |file| {
+            read_plan(file, &plan(ranges)).expect("test ranges are inside the fixture")
+        })
     }
 
     #[test]

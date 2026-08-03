@@ -557,66 +557,20 @@ impl Scheduler {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        OperationId, ScheduleDecision, ScheduledRead, Scheduler, SchedulerError,
-        try_reserve_progress,
-    };
-    use crate::budget::ByteBudget;
-    use crate::execution::{ExecutionConfig, ExecutionPlan, ReadSize};
-    use crate::plan::ReadPlan;
+    use super::{OperationId, ScheduleDecision, Scheduler, SchedulerError, try_reserve_progress};
     use crate::range::ReadRange;
+    use crate::test_support::{
+        assert_exhausted, assert_waiting, execution, ready, scheduler_for, span,
+    };
 
     const TEBIBYTE: u64 = 1 << 40;
 
-    fn span(start: u64, end: u64) -> ReadRange {
-        ReadRange::try_new(start, end - start).expect("test spans are valid ranges")
-    }
-
-    fn execution(schedule: &[ReadRange], read_size_bytes: u64, budget_bytes: u64) -> ExecutionPlan {
-        let plan = ReadPlan::try_from_schedule(schedule).expect("test schedules are not empty");
-        let read_size = ReadSize::try_new(read_size_bytes).expect("test read sizes are non-zero");
-        let budget = ByteBudget::try_new(budget_bytes).expect("test budgets are non-zero");
-        let config = ExecutionConfig::try_new(read_size, budget)
-            .expect("test configurations pair a read size with a large enough budget");
-
-        ExecutionPlan::try_from_read_plan(&plan, config).expect("test plans derive without failure")
-    }
-
     fn scheduler(schedule: &[ReadRange], read_size_bytes: u64, budget_bytes: u64) -> Scheduler {
-        Scheduler::try_new(execution(schedule, read_size_bytes, budget_bytes))
-            .expect("test schedulers construct without failure")
+        scheduler_for(execution(schedule, read_size_bytes, budget_bytes))
     }
 
     fn op(logical_range_index: usize, operation_index: u64) -> OperationId {
         OperationId::new(logical_range_index, operation_index)
-    }
-
-    fn ready(scheduler: &mut Scheduler) -> ScheduledRead {
-        match scheduler
-            .schedule_next()
-            .expect("test scheduling decisions succeed")
-        {
-            ScheduleDecision::Ready(read) => read,
-            decision => panic!("expected a ready decision, got {decision:?}"),
-        }
-    }
-
-    fn assert_waiting(scheduler: &mut Scheduler) {
-        assert!(matches!(
-            scheduler
-                .schedule_next()
-                .expect("test scheduling decisions succeed"),
-            ScheduleDecision::WaitingForBudget
-        ));
-    }
-
-    fn assert_exhausted(scheduler: &mut Scheduler) {
-        assert!(matches!(
-            scheduler
-                .schedule_next()
-                .expect("test scheduling decisions succeed"),
-            ScheduleDecision::Exhausted
-        ));
     }
 
     fn counters(scheduler: &Scheduler) -> (u64, u64) {
@@ -923,8 +877,7 @@ mod tests {
         let execution = execution(&[span(0, TEBIBYTE)], 4096, 65536);
         assert_eq!(execution.ranges()[0].operation_count(), 268_435_456);
 
-        let mut scheduler =
-            Scheduler::try_new(execution).expect("test schedulers construct without failure");
+        let mut scheduler = scheduler_for(execution);
 
         let mut live = Vec::new();
         for operation_index in 0..16 {

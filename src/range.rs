@@ -1,8 +1,8 @@
 //! Validated file-range requests.
 //!
-//! A [`ReadRange`] is the smallest unit a later schedule, coalescer, or backend
-//! operates on. It describes *where* to start reading and *how many* bytes to
-//! request; it never touches a file.
+//! A [`ReadRange`] is the smallest unit the schedule parser, the coalescer,
+//! and the backends operate on. It describes *where* to start reading and
+//! *how many* bytes to request; it never touches a file.
 
 use thiserror::Error;
 
@@ -24,14 +24,16 @@ pub enum RangeError {
 /// a `length` of `4` therefore covers offsets `100`, `101`, `102`, and `103`,
 /// and its exclusive end is `104`.
 ///
-/// Half-open bounds keep adjacency arithmetic trivial for the coalescing work
-/// that comes later: two ranges touch exactly when one range's end equals the
-/// other range's offset, with no off-by-one correction.
+/// Half-open bounds keep adjacency arithmetic trivial for
+/// [`coalesce`](crate::coalesce): two ranges touch exactly when one range's
+/// end equals the other range's offset, with no off-by-one correction.
 ///
 /// The only way to build a value is [`ReadRange::try_new`], so every existing
 /// `ReadRange` covers at least one byte and has an exclusive end that fits in a
 /// `u64`. Nothing here checks the range against a real file: sizes and EOF
-/// belong to a later slice.
+/// are the read backends' concern ([`read_plan`](crate::read_plan),
+/// [`execute_pread`](crate::execute_pread)), which report a range passing
+/// the end of the file as a typed error.
 ///
 /// # Examples
 ///
