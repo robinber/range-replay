@@ -10,8 +10,8 @@
 //!
 //! The value is deliberately backend-neutral: nothing here reads a file,
 //! chooses a backend, or assembles logical output. The synchronous adapter
-//! [`read_scheduled`](crate::read_scheduled) is the only construction path
-//! today. A completion is also distinct from the logical
+//! [`read_scheduled`](crate::read_scheduled) is the only production
+//! construction path. A completion is also distinct from the logical
 //! [`RangeOutput`](crate::RangeOutput): a completion covers one *physical*
 //! operation of an execution plan, while a range output covers one complete
 //! canonical *logical* range. An
@@ -50,9 +50,10 @@ pub(crate) struct LengthMismatch {
 /// # Budget lifetime
 ///
 /// The completion keeps the admission's reservation live for its whole
-/// lifetime: while the bytes wait for a future consumer and while callers
-/// borrow [`Self::bytes`], the range's length stays counted in the
-/// scheduler's in-flight bytes. The physical buffer field is declared
+/// lifetime: while the bytes wait to be recorded by an
+/// [`OutputAssembler`](crate::OutputAssembler) and while callers borrow
+/// [`Self::bytes`], the range's length stays counted in the scheduler's
+/// in-flight bytes. The physical buffer field is declared
 /// before the scheduled handle, so normal field destruction order destroys
 /// the buffer first and releases the reservation only afterwards; the
 /// budget can never admit replacement work while an old physical buffer
@@ -157,32 +158,8 @@ impl CompletedRead {
 #[cfg(test)]
 mod tests {
     use super::{CompletedRead, LengthMismatch};
-    use crate::budget::ByteBudget;
-    use crate::execution::{ExecutionConfig, ExecutionPlan, ReadSize};
-    use crate::plan::ReadPlan;
     use crate::range::ReadRange;
-    use crate::scheduler::{ScheduleDecision, ScheduledRead, Scheduler};
-
-    fn admitted_single(offset: u64, length: u64, budget_bytes: u64) -> (Scheduler, ScheduledRead) {
-        let range = ReadRange::try_new(offset, length).expect("test ranges are valid");
-        let plan = ReadPlan::try_from_schedule(&[range]).expect("test schedules are not empty");
-        let read_size = ReadSize::try_new(length).expect("test read sizes are non-zero");
-        let budget = ByteBudget::try_new(budget_bytes).expect("test budgets are non-zero");
-        let config = ExecutionConfig::try_new(read_size, budget)
-            .expect("test configurations pair a read size with a large enough budget");
-        let execution = ExecutionPlan::try_from_read_plan(&plan, config)
-            .expect("test plans derive without failure");
-        let mut scheduler =
-            Scheduler::try_new(execution).expect("test schedulers construct without failure");
-
-        match scheduler
-            .schedule_next()
-            .expect("test scheduling decisions succeed")
-        {
-            ScheduleDecision::Ready(read) => (scheduler, read),
-            decision => panic!("expected a ready decision, got {decision:?}"),
-        }
-    }
+    use crate::test_support::admitted_single;
 
     #[test]
     fn try_new_preserves_identity_range_and_bytes() {

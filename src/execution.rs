@@ -505,14 +505,10 @@ mod tests {
         ByteBudget, ExecutionConfig, ExecutionConfigError, ExecutionPlan, PlannedRange, ReadSize,
         ReadSizeError,
     };
-    use crate::plan::ReadPlan;
     use crate::range::ReadRange;
+    use crate::test_support::{execution, plan, span};
 
     const TEBIBYTE: u64 = 1 << 40;
-
-    fn span(start: u64, end: u64) -> ReadRange {
-        ReadRange::try_new(start, end - start).expect("test spans are valid ranges")
-    }
 
     fn read_size(bytes: u64) -> ReadSize {
         ReadSize::try_new(bytes).expect("test read sizes are non-zero")
@@ -525,15 +521,6 @@ mod tests {
     fn config(read_size_bytes: u64, budget_bytes: u64) -> ExecutionConfig {
         ExecutionConfig::try_new(read_size(read_size_bytes), budget(budget_bytes))
             .expect("test configurations pair a read size with a large enough budget")
-    }
-
-    fn plan(schedule: &[ReadRange]) -> ReadPlan {
-        ReadPlan::try_from_schedule(schedule).expect("test schedules are not empty")
-    }
-
-    fn execution(schedule: &[ReadRange], read_size_bytes: u64, budget_bytes: u64) -> ExecutionPlan {
-        ExecutionPlan::try_from_read_plan(&plan(schedule), config(read_size_bytes, budget_bytes))
-            .expect("test plans derive without failure")
     }
 
     fn read_at(planned: &PlannedRange, operation_index: u64) -> Option<ReadRange> {

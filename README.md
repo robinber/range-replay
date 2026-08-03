@@ -9,72 +9,37 @@ file-range read schedules on Linux.
 
 ## Status
 
-**Early implementation.** The validated `ReadRange` value type, deterministic
-coalescing of overlapping or adjacent ranges, the textual `offset,length`
-schedule format parsed by `parse_schedule`, the validated `ReadPlan` boundary
-type owning the canonical coalesced ranges, the synchronous positioned-read
-(`pread`) reference backend executing a `ReadPlan` against an open file, a
-minimal synchronous command line exposing that pipeline, deterministic
-per-range SHA-256 checksums over completed range outputs (`checksum`,
-library-only: the CLI neither renders nor compares checksums), and validated
-execution configuration with compact deterministic physical planning
-(`ReadSize` bounds one physical read, `ByteBudget` bounds the total bytes in
-flight, `ExecutionConfig` validates `read_size <= byte_budget` by
-construction, and the derived `ExecutionPlan` splits with the read size only,
-stores one planned entry per logical range, and computes each physical read
-on demand instead of materializing them; library-only: the CLI takes no
-configuration arguments), a single-threaded `BudgetLimiter` enforcing the
-in-flight byte budget through uniquely owned RAII `Reservation` guards (the
-accounting primitive: several planned reads can be admitted together when
-the budget can hold their combined lengths), and a compact greedy
-`Scheduler` incrementally selecting pending physical reads from an owned
-`ExecutionPlan` — greatest fitting length first, equal lengths in plan
-order, no combination search — reserving their exact bytes through an
-internal limiter before returning uniquely owned `ScheduledRead` handles
-that pair a stable `OperationId` with the reservation (scheduling primitive
-only: temporary `WaitingForBudget` backpressure stays distinct from plan
-exhaustion, and exhaustion is not execution completion) exist.
+**Early implementation.** The whole synchronous path exists as a library;
+the crate rustdoc (`cargo doc`) is the authoritative description of every
+exported item and its exact contract.
 
-A synchronous one-operation adapter (`read_scheduled`) also exists: it
-executes exactly one admitted `ScheduledRead` through the `pread`
-exact-read loop into a backend-neutral `CompletedRead` that owns the exact
-physical bytes and keeps the reservation live until the completion is
-destroyed. The physical buffer is dropped before the reservation releases,
-every error releases the admitted bytes and exposes no partial output, and
-the file cursor never moves.
+- Validated `ReadRange` values, deterministic coalescing, the textual
+  `offset,length` schedule format (`parse_schedule`), and the validated
+  `ReadPlan` boundary type.
+- Deterministic per-range SHA-256 checksums (`checksum`; library-only, the
+  CLI neither renders nor compares them).
+- Validated execution configuration and compact physical planning
+  (`ReadSize`, `ByteBudget`, `ExecutionConfig` proves
+  `read_size <= byte_budget`, `ExecutionPlan` computes each physical read
+  on demand).
+- The in-flight byte budget enforced as a hard limit through uniquely
+  owned RAII `Reservation` guards (`BudgetLimiter`).
+- Budget-aware greedy scheduling of physical reads (`Scheduler`,
+  `ScheduledRead`, `OperationId`); backpressure stays distinct from
+  exhaustion, and exhaustion is not execution completion.
+- The synchronous positioned-read reference backend (`read_plan`), the
+  one-operation adapter (`read_scheduled`, `CompletedRead`), and
+  out-of-order logical assembly (`OutputAssembler`, `RangeOutput`).
+- A fail-closed synchronous executor (`execute_pread`) driving
+  scheduling, submission, completion, and assembly end to end over a
+  private backend session: global success requires an exhausted
+  scheduler, an idle session, and complete assembly, and every failure
+  drains the run and exposes no partial output
+  (`PreadExecutionError`).
+- A minimal synchronous CLI on the `read_plan` path (no configuration
+  arguments).
 
-A backend-neutral logical assembly primitive (`OutputAssembler`) also
-exists: prepared fallibly from one `ExecutionPlan` before any backend work
-runs, it allocates every final logical buffer up front (deliberately
-outside the in-flight byte budget, which bounds physical buffers only),
-accepts exact `CompletedRead` values in arbitrary completion order,
-validates identity, expected physical range, and checked destination
-bounds before copying any byte, tracks progress with one compact
-remaining-byte counter per logical range (never per-operation state), and
-exposes `RangeOutput` values only after every logical byte was recorded —
-finalization moves buffers into plan-order outputs without recopying.
-Completions must come from the scheduler run paired with the prepared
-plan; two independent runs over byte-for-byte identical plans are not
-distinguished at this level, and a duplicate from such a run that still
-fits the remaining count double-counts progress undetected.
-
-A synchronous `pread` executor (`execute_pread`) now drives the
-budget-aware physical plan end to end: it consumes one `ExecutionPlan`,
-borrows one open `File`, owns one private non-clonable backend session,
-and drives scheduling, submission, completion, and assembly to global
-success, returning plan-order `RangeOutput` values only once the scheduler
-is exhausted, no operation remains active, and every logical byte was
-assembled (exhaustion alone is never success). Any failure after work was
-admitted is fail-closed: new submissions stop, the session is drained,
-every reservation releases through RAII, the primary typed
-`PreadExecutionError` is preserved — including alongside an additional
-drainage failure — and no partial output is observable. Because the
-scheduler, session, and assembler of a run stay encapsulated together,
-the high-level path cannot mix completions from two independent runs; the
-internal backend-session trait and generic driver stay private. All of
-this stays library-only — the CLI still uses its existing `read_plan`
-path, its invocation and output are unchanged, and no backend selection
-or `io_uring` backend exists yet.
+No backend selection or `io_uring` backend exists yet.
 
 ## Usage
 
@@ -124,6 +89,8 @@ items already exist.
 - An explicit file-range schedule format.
 - Deterministic validation and coalescing of overlapping or adjacent ranges.
 - A synchronous `pread` reference backend.
+- A fail-closed library executor driving the budget-aware physical plan
+  (`execute_pread`).
 - A minimal synchronous command line exposing the pipeline.
 - An `io_uring` backend with a strict in-flight byte budget.
 - Typed errors for invalid ranges, overflow, EOF, partial reads, and I/O

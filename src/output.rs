@@ -691,61 +691,26 @@ impl OutputAssembler {
 
 #[cfg(test)]
 mod tests {
-    use std::fs::File;
-
     use super::{
         AssemblyError, OutputAssembler, destination_span, try_reserve_outputs, try_reserve_state,
     };
-    use crate::budget::ByteBudget;
     use crate::completion::CompletedRead;
-    use crate::execution::{ExecutionConfig, ExecutionPlan, ReadSize};
-    use crate::plan::ReadPlan;
+    use crate::execution::ExecutionPlan;
     use crate::pread::read_scheduled;
-    use crate::range::ReadRange;
-    use crate::scheduler::{ScheduleDecision, ScheduledRead, Scheduler};
-
-    fn span(start: u64, end: u64) -> ReadRange {
-        ReadRange::try_new(start, end - start).expect("test spans are valid ranges")
-    }
-
-    fn execution(schedule: &[ReadRange], read_size_bytes: u64, budget_bytes: u64) -> ExecutionPlan {
-        let plan = ReadPlan::try_from_schedule(schedule).expect("test schedules are not empty");
-        let read_size = ReadSize::try_new(read_size_bytes).expect("test read sizes are non-zero");
-        let budget = ByteBudget::try_new(budget_bytes).expect("test budgets are non-zero");
-        let config = ExecutionConfig::try_new(read_size, budget)
-            .expect("test configurations pair a read size with a large enough budget");
-
-        ExecutionPlan::try_from_read_plan(&plan, config).expect("test plans derive without failure")
-    }
+    use crate::scheduler::{ScheduleDecision, Scheduler};
+    use crate::test_support::{
+        BDAC_FIXTURE, assert_exhausted, assert_waiting, execution, ready, scheduler_for, span,
+        with_file_content,
+    };
 
     fn assembler_for(execution: &ExecutionPlan) -> OutputAssembler {
         OutputAssembler::try_new(execution).expect("test assemblers construct without failure")
-    }
-
-    fn scheduler_for(execution: ExecutionPlan) -> Scheduler {
-        Scheduler::try_new(execution).expect("test schedulers construct without failure")
-    }
-
-    fn ready(scheduler: &mut Scheduler) -> ScheduledRead {
-        match scheduler
-            .schedule_next()
-            .expect("test scheduling decisions succeed")
-        {
-            ScheduleDecision::Ready(read) => read,
-            decision => panic!("expected a ready decision, got {decision:?}"),
-        }
     }
 
     fn completed(scheduler: &mut Scheduler, bytes: &[u8]) -> CompletedRead {
         let admission = ready(scheduler);
         CompletedRead::try_new(bytes.to_vec(), admission)
             .expect("test bytes cover the admitted range exactly")
-    }
-
-    fn with_file_content<T>(test: &str, contents: &[u8], run: impl FnOnce(&File) -> T) -> T {
-        crate::test_support::with_file_content(&format!("output-{test}"), contents, |file| {
-            run(file)
-        })
     }
 
     #[test]
@@ -779,7 +744,7 @@ mod tests {
 
     #[test]
     fn the_bdac_fixture_reconstructs_exact_bytes_despite_completion_order() {
-        with_file_content("bdac", b"abcdefghijklmn", |file| {
+        with_file_content("bdac", BDAC_FIXTURE, |file| {
             let plan = execution(&[span(0, 14)], 4, 10);
             let mut assembler = assembler_for(&plan);
             let mut scheduler = scheduler_for(plan);
@@ -791,12 +756,7 @@ mod tests {
             assert_eq!(b.id().operation_index(), 1);
             assert_eq!(d.id().operation_index(), 3);
             assert_eq!(scheduler.in_flight_bytes(), 10);
-            assert!(matches!(
-                scheduler
-                    .schedule_next()
-                    .expect("test scheduling decisions succeed"),
-                ScheduleDecision::WaitingForBudget
-            ));
+            assert_waiting(&mut scheduler);
 
             assembler.record(b).expect("B matches its expected range");
             assert_eq!(scheduler.in_flight_bytes(), 6);
@@ -816,17 +776,12 @@ mod tests {
             assembler.record(c).expect("C matches its expected range");
             assert_eq!(scheduler.in_flight_bytes(), 0);
             assert!(assembler.is_complete());
-            assert!(matches!(
-                scheduler
-                    .schedule_next()
-                    .expect("test scheduling decisions succeed"),
-                ScheduleDecision::Exhausted
-            ));
+            assert_exhausted(&mut scheduler);
 
             let outputs = assembler.finish().expect("every logical byte was recorded");
             assert_eq!(outputs.len(), 1);
             assert_eq!(outputs[0].range(), span(0, 14));
-            assert_eq!(outputs[0].bytes(), b"abcdefghijklmn");
+            assert_eq!(outputs[0].bytes(), BDAC_FIXTURE);
         });
     }
 
@@ -955,7 +910,7 @@ mod tests {
         let outputs = assembler
             .finish()
             .expect("the failed attempt was non-mutating");
-        assert_eq!(outputs[0].bytes(), b"abcdefghijklmn");
+        assert_eq!(outputs[0].bytes(), BDAC_FIXTURE);
     }
 
     #[test]

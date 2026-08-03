@@ -46,9 +46,13 @@ silently choose the interpretation that permits more work.
     schedule.rs  textual schedule parsing (`offset,length` lines)
     scheduler.rs budget-aware greedy selection of pending physical reads
                  (`Scheduler`, `ScheduledRead`, `ScheduleDecision`, `OperationId`)
-    test_support.rs shared cfg(test) temporary-file fixture helper
+    test_support.rs shared cfg(test) test fixtures (ranges, plans, schedulers,
+                 temporary files)
     main.rs      thin binary entrypoint
   ```
+
+  The parentheticals name flagship items, not exhaustive export lists;
+  `src/lib.rs` is the authoritative public surface.
 
 - `Cargo.lock` is committed because this package builds an application.
 - Do not introduce a multi-crate workspace until there is a demonstrated need
@@ -113,7 +117,7 @@ Preferred patterns:
 
 ## Architecture notes
 
-The package is still taking shape. Until modules exist, prefer:
+The module boundaries above are established. Preserve them:
 
 - pure planning / validation / coalescing logic separate from I/O backends;
 - typed errors at domain boundaries;
