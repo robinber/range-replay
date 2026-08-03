@@ -36,21 +36,33 @@ exported item and its exact contract.
   scheduler, an idle session, and complete assembly, and every failure
   drains the run and exposes no partial output
   (`PreadExecutionError`).
-- A minimal synchronous CLI on the `read_plan` path (no configuration
-  arguments).
+- A minimal synchronous CLI that validates an explicit execution
+  configuration, derives the compact physical plan, and executes it
+  through the budget-aware `execute_pread` executor.
 
-No backend selection or `io_uring` backend exists yet.
+The byte budget limits the physical read buffers simultaneously in flight,
+not the final logical output buffers or total process memory. No `io_uring`
+backend, backend selector, comparison report, measurement report, or
+displayed checksum exists yet.
 
 ## Usage
 
 ```text
-range-replay <DATA_FILE> <SCHEDULE_FILE>
+range-replay --read-size <OCTETS> --byte-budget <OCTETS> <DATA_FILE> <SCHEDULE_FILE>
 ```
 
+Both options are required raw decimal byte counts with no default:
+`--read-size` bounds the length of one physical read and `--byte-budget`
+bounds the physical read bytes simultaneously in flight. No KiB/MiB, SI,
+hexadecimal, or expression suffixes are accepted, and the read size must
+not exceed the byte budget.
+
 The schedule file is UTF-8 text with one `offset,length` line per requested
-range. The schedule is parsed, coalesced into the canonical plan, and executed
-against the data file with the synchronous `pread` backend. On success, stdout
-holds exactly one line per canonical range, ordered by ascending offset:
+range. The configuration is validated first, then the schedule is parsed,
+coalesced into the canonical plan, split into the compact physical plan, and
+executed against the data file with the synchronous budget-aware `pread`
+executor. On success, stdout holds exactly one line per canonical range,
+ordered by ascending offset:
 
 ```text
 offset,length,hex
@@ -58,12 +70,18 @@ offset,length,hex
 
 `hex` is the complete range payload, each byte rendered as exactly two
 lowercase, zero-padded hexadecimal characters; payload bytes are never
-interpreted as text. For a data file containing `0123456789abcdef` and a
+interpreted as text. For a data file containing `0123456789abcdef`, a
 schedule containing:
 
 ```text
 10,4
 2,3
+```
+
+and the invocation:
+
+```text
+range-replay --read-size 4 --byte-budget 10 data.bin schedule.txt
 ```
 
 the exact output is:
@@ -73,10 +91,15 @@ the exact output is:
 10,4,61626364
 ```
 
-Any failure — an unreadable or invalid schedule, an empty plan, an unopenable
-data file, or a backend error such as reading past end of file — is reported
-on stderr with its full cause chain and a non-zero exit status, and stdout
-stays empty: no partial output is ever rendered for a failed run.
+The read size and byte budget shape only the physical execution, so every
+valid configuration produces identical logical output for equal inputs.
+
+Any failure — an invalid configuration, an unreadable or invalid schedule, an
+empty plan, an unopenable data file, or an executor error such as reading
+past end of file — is reported on stderr with its full cause chain and a
+non-zero exit status, and stdout stays empty: no partial output is ever
+rendered for a failed run. An invalid configuration is rejected before any
+filesystem access.
 
 The project is deliberately bounded. It is a Rust and Linux systems-learning
 exercise, not a production storage engine or a general-purpose async runtime.
