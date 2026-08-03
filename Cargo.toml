@@ -1,7 +1,7 @@
 [package]
 name = "range-replay"
 version = "0.1.0"
-description = "Educational planner and executor for file-range read schedules with a synchronous pread reference backend"
+description = "Educational planner and executor for file-range read schedules with a synchronous pread reference backend and a planned io_uring backend"
 readme = "README.md"
 edition = "2024"
 rust-version = "1.97.0"
