@@ -85,22 +85,32 @@ pub enum PreadExecutionError {
         #[source]
         source: TryReserveError,
     },
-    /// The scheduler reported budget backpressure while no backend
-    /// operation was active.
+    /// No progress was possible because no backend operation was active.
     ///
-    /// With pending work, nothing admitted, and nothing to wait for, no
-    /// progress is possible. The state is unreachable through a correct
-    /// session — every admitted reservation belongs to an active operation
-    /// or a retained completion — so the driver returns this typed error
-    /// instead of spinning, sleeping, or misreporting exhaustion.
-    #[error("the scheduler is waiting for budget while no backend operation is active")]
+    /// The driver reports this when the scheduler asks it to wait for
+    /// budget while nothing is active — pending work, nothing admitted,
+    /// nothing to wait for — and the internal session reports the same
+    /// impossibility when a completion is requested from an idle session.
+    /// Both states are unreachable through a correct session — every
+    /// admitted reservation belongs to an active operation or a retained
+    /// completion — so the driver returns this typed error instead of
+    /// spinning, sleeping, or misreporting exhaustion.
+    #[error("no progress is possible: no backend operation is active")]
     StalledWithoutActiveWork,
     /// Draining the session after a primary failure reported an additional
     /// failure.
     ///
     /// The primary failure stays the source of this variant, so the cause
     /// chain always surfaces what originally failed; the drainage failure
-    /// is preserved alongside it instead of being discarded.
+    /// is preserved alongside it instead of being discarded. The drainage
+    /// failure is a sibling field outside the
+    /// [`source`](std::error::Error::source) chain — it appears in the
+    /// display text, and programmatic inspection must match this variant
+    /// to observe both failures. Several cleanup failures nest: when the
+    /// drainage pull and the final drain both fail, the primary of the
+    /// outer variant is itself a [`Self::DrainageFailed`], and the
+    /// innermost end of the chain is always the failure that originally
+    /// ended the run.
     #[error("draining the pread session after a failure reported another failure: {drainage}")]
     DrainageFailed {
         /// The failure that ended the run before drainage began.
@@ -138,9 +148,11 @@ trait BackendSession {
     ///
     /// A returned completion still owns its reservation. A returned error
     /// is terminal for exactly one previously active operation, whose owned
-    /// resources were destroyed before returning. Callers must only call
-    /// this while [`Self::has_active`] reports active work; a session with
-    /// nothing active reports a typed error instead of blocking forever.
+    /// resources were destroyed before returning — every outcome therefore
+    /// strictly shrinks the active set, which is what lets the driver's
+    /// drainage pull terminate. Callers must only call this while
+    /// [`Self::has_active`] reports active work; a session with nothing
+    /// active reports a typed error instead of blocking forever.
     fn wait_for_completion(&mut self) -> Result<CompletedRead, Self::Error>;
 
     /// Returns whether any submitted operation has not yet been handed
@@ -260,12 +272,18 @@ where
 ///
 /// The run is already globally failed, so successful completions pulled
 /// here are destroyed without being recorded — destroying each one drops
-/// its physical buffer and releases its reservation. The session's own
-/// [`BackendSession::drain`] then establishes the idle safe state for
-/// anything still active. The primary failure is never erased: an
-/// additional drainage failure is preserved alongside it, and when both the
-/// completion pull and the final drain fail, the first drainage failure
-/// wins.
+/// its physical buffer and releases its reservation. Every
+/// [`BackendSession::wait_for_completion`] outcome is terminal for exactly
+/// one previously active operation, so the pull strictly shrinks the
+/// active set until nothing remains; the session's own
+/// [`BackendSession::drain`] then proves the idle safe state. No cleanup
+/// failure is ever discarded: each additional failure — from the pull or
+/// from the final drain — nests another [`DriverFailure::Drainage`] layer
+/// whose innermost failure is always the original primary. A session that
+/// still could not prove idleness is destroyed with the run — the facade
+/// drops it by value before returning — so its `Drop` remains the
+/// last-resort ownership guard while the returned error reports the failed
+/// drainage.
 fn drain_after_failure<S>(
     session: &mut S,
     primary: DriverFailure<S::Error>,
@@ -273,28 +291,28 @@ fn drain_after_failure<S>(
 where
     S: BackendSession,
 {
-    let mut drainage_failure = None;
+    let mut failure = primary;
 
     while session.has_active() {
         match session.wait_for_completion() {
             Ok(completed) => drop(completed),
-            Err(failure) => {
-                drainage_failure = Some(failure);
-                break;
+            Err(additional) => {
+                failure = DriverFailure::Drainage {
+                    primary: Box::new(failure),
+                    drainage: additional,
+                };
             }
         }
     }
 
-    let drain_failure = session.drain().err();
-    let drainage_failure = drainage_failure.or(drain_failure);
-
-    match drainage_failure {
-        None => primary,
-        Some(drainage) => DriverFailure::Drainage {
-            primary: Box::new(primary),
-            drainage,
-        },
+    if let Err(additional) = session.drain() {
+        failure = DriverFailure::Drainage {
+            primary: Box::new(failure),
+            drainage: additional,
+        };
     }
+
+    failure
 }
 
 /// Typed terminal failure of one [`PreadSession`] operation.

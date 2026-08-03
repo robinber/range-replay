@@ -449,17 +449,34 @@ fn an_assembly_failure_with_backend_work_active_follows_the_same_drainage() {
 
 #[test]
 fn drainage_completions_are_destroyed_without_being_recorded() {
-    let (session, state) = fake_session(vec![WaitStep::Fail(B)]);
+    // The first drainage pull returns a completion of an unrelated run.
+    // Recording it would fail with an observable assembly range mismatch
+    // and change the returned error; destroying it leaves the primary
+    // failure untouched, so the exact error discriminates the two.
+    let (mut session, state) = fake_session(vec![WaitStep::Fail(B), WaitStep::Foreign]);
+    session.foreign = Some(foreign_completion());
 
     let result = execute_with_session(bdac_plan(), session);
 
-    // The run failed before A and D completed, so their drainage
-    // completions can only have been destroyed: no output is observable,
-    // and nothing retains them after the session drained.
-    assert!(result.is_err(), "no output is exposed after a failure");
+    assert!(matches!(
+        result,
+        Err(DriverFailure::Backend(FakeFailure::Wait(op))) if op == B
+    ));
+
     let state = state.borrow();
-    assert!(state.events.contains(&Event::Completed(A)));
-    assert!(state.events.contains(&Event::Completed(D)));
+    assert_eq!(
+        state.events,
+        vec![
+            Event::Submitted(A),
+            Event::Submitted(B),
+            Event::Submitted(D),
+            Event::CompletionFailed(B),
+            Event::ForeignReturned,
+            Event::Completed(A),
+            Event::Completed(D),
+            Event::Drained,
+        ]
+    );
     assert!(state.active.is_empty());
 }
 
@@ -511,7 +528,63 @@ fn a_drainage_wait_failure_is_preserved_alongside_the_primary_failure() {
         *state.events.last().expect("events were recorded"),
         Event::Drained
     );
-    assert!(state.active.is_empty(), "the final drain released B");
+    assert!(
+        state.active.is_empty(),
+        "the drainage pull kept going past its failure and released B"
+    );
+}
+
+#[test]
+fn simultaneous_drainage_wait_and_drain_failures_are_all_preserved() {
+    let (mut session, state) = fake_session(vec![WaitStep::Fail(A)]);
+    session.submit_failure = Some(D);
+    session.fail_drain = true;
+
+    let result = execute_with_session(bdac_plan(), session);
+
+    // Both cleanup failures nest around the original primary failure:
+    // the outer layer carries the failed final drain, the inner layer the
+    // drainage wait failure, and the innermost failure is the rejected
+    // submission that ended the run.
+    match result {
+        Err(DriverFailure::Drainage { primary, drainage }) => {
+            assert_eq!(drainage, FakeFailure::Drain);
+            match *primary {
+                DriverFailure::Drainage {
+                    primary: inner,
+                    drainage: pull_failure,
+                } => {
+                    assert_eq!(pull_failure, FakeFailure::Wait(A));
+                    assert!(matches!(
+                        *inner,
+                        DriverFailure::Backend(FakeFailure::Submit(op)) if op == D
+                    ));
+                }
+                other => panic!("expected the nested drainage wait failure, got {other:?}"),
+            }
+        }
+        other => panic!("expected a drainage failure, got {other:?}"),
+    }
+
+    // The pull kept draining past its failure: A was consumed by its
+    // terminal failure and B completed unscripted, so no accepted work
+    // stays retained even though the final drain failed.
+    let state = state.borrow();
+    assert_eq!(
+        state.events,
+        vec![
+            Event::Submitted(A),
+            Event::Submitted(B),
+            Event::SubmitRejected(D),
+            Event::CompletionFailed(A),
+            Event::Completed(B),
+            Event::Drained,
+        ]
+    );
+    assert!(
+        state.active.is_empty(),
+        "all accepted work must be released before the driver returns"
+    );
 }
 
 #[test]
