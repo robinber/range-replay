@@ -27,8 +27,8 @@
 //!
 //! Hand-calculated cases pin exact expectations; proptest cases sweep small
 //! random files, schedules, and configurations. A failing proptest input is
-//! persisted under `proptest-regressions/`, which must be committed so the
-//! shrunk counterexample replays on every later run.
+//! persisted next to this file in `differential.proptest-regressions`, which
+//! must be committed so the shrunk counterexample replays on every later run.
 #![expect(
     unused_crate_dependencies,
     reason = "only the library target and proptest are exercised by this differential test"
