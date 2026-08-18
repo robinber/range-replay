@@ -39,11 +39,21 @@ exported item and its exact contract.
 - A minimal synchronous CLI that validates an explicit execution
   configuration, derives the compact physical plan, and executes it
   through the budget-aware `execute_pread` executor.
+- A Linux-only `io_uring` correctness backend (`execute_uring`) driving
+  the same physical plans through the same fail-closed driver: a
+  validated queue depth (`UringQueueDepth`) bounds simultaneously
+  submitted kernel reads on top of the hard byte budget, completions may
+  arrive out of order while outputs stay in plan order, and every
+  failure is a typed `UringExecutionError` with no partial output. It
+  needs a Linux kernel with `io_uring` read support (5.6 or newer) at
+  runtime; on other platforms the library surface is unchanged and the
+  `io-uring` dependency is not compiled.
 
 The byte budget limits the physical read buffers simultaneously in flight,
-not the final logical output buffers or total process memory. No `io_uring`
-backend, backend selector, comparison report, measurement report, or
-displayed checksum exists yet.
+not the final logical output buffers or total process memory. The library
+now has an `io_uring` correctness backend, but no CLI backend selector,
+workload matrix, comparison report, measurement report, or displayed
+checksum exists yet; the CLI still executes only the `pread` backend.
 
 ## Usage
 

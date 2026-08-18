@@ -12,11 +12,13 @@
 //! neither inject foreign completions nor mix two independent runs.
 //!
 //! Internally a small dependency-inversion seam exists: the driver is
-//! generic over a private [`BackendSession`] trait, and the only production
-//! implementation is a synchronous [`PreadSession`] over the existing
-//! [`read_scheduled`] exact-read adapter. The trait is a testing and
-//! evolution seam, not a public extension point; a later `io_uring` session
-//! must earn its own contract before anything here becomes public.
+//! generic over a private [`BackendSession`] trait with two production
+//! implementations: the synchronous [`PreadSession`] over the existing
+//! [`read_scheduled`] exact-read adapter, and — on Linux — the bounded
+//! `io_uring` session behind `execute_uring` in the `uring` child
+//! module. The trait is a testing and evolution seam, not a public
+//! extension point; only the concrete facades, their configuration
+//! types, and their typed errors are exported.
 //!
 //! The call is deliberately blocking. Kernel-side concurrency — several
 //! admitted reads in flight under the byte budget — needs no Rust async
@@ -45,6 +47,11 @@ use crate::scheduler::{ScheduleDecision, ScheduledRead, Scheduler, SchedulerErro
 
 #[cfg(test)]
 mod tests;
+#[cfg(target_os = "linux")]
+mod uring;
+
+#[cfg(target_os = "linux")]
+pub use uring::{UringExecutionError, UringQueueDepth, UringQueueDepthError, execute_uring};
 
 /// Reason one [`execute_pread`] run failed globally.
 ///
@@ -88,7 +95,8 @@ pub enum PreadExecutionError {
     /// No progress was possible because no backend operation was active.
     ///
     /// The driver reports this when the scheduler asks it to wait for
-    /// budget while nothing is active — pending work, nothing admitted,
+    /// budget — or the session reports exhausted submission capacity —
+    /// while nothing is active — pending work, nothing admitted,
     /// nothing to wait for — and the internal session reports the same
     /// impossibility when a completion is requested from an idle session.
     /// Both states are unreachable through a correct session — every
@@ -159,6 +167,18 @@ trait BackendSession {
     /// back through [`Self::wait_for_completion`].
     fn has_active(&self) -> bool;
 
+    /// Returns whether the session can accept one more submission right
+    /// now.
+    ///
+    /// While this reports `false`, the driver must not ask the scheduler
+    /// for another admission — scheduling removes the operation from
+    /// pending state and creates its reservation — and instead waits for
+    /// one completion and records it before retrying. A session that
+    /// reports exhausted capacity must have at least one active
+    /// operation, since capacity is only consumed by successful
+    /// submissions.
+    fn has_submission_capacity(&self) -> bool;
+
     /// Establishes an idle safe state, destroying every still-active
     /// operation and all resources it could access.
     ///
@@ -225,6 +245,26 @@ where
     S: BackendSession,
 {
     loop {
+        if !session.has_submission_capacity() {
+            if !session.has_active() {
+                return Err(DriverFailure::StalledWithoutActiveWork);
+            }
+
+            // The scheduler is not consulted while the session is at
+            // capacity: a scheduling decision would already remove the
+            // operation from pending state and reserve its bytes.
+            // Recording the completion destroys its physical buffer and
+            // releases its reservation before scheduling resumes.
+            let completed = session
+                .wait_for_completion()
+                .map_err(DriverFailure::Backend)?;
+            assembler
+                .record(completed)
+                .map_err(DriverFailure::Assembly)?;
+
+            continue;
+        }
+
         match scheduler
             .schedule_next()
             .map_err(DriverFailure::Scheduling)?
@@ -376,6 +416,13 @@ impl BackendSession for PreadSession<'_> {
 
     fn has_active(&self) -> bool {
         !self.completed.is_empty()
+    }
+
+    fn has_submission_capacity(&self) -> bool {
+        // The synchronous session completes each read at submission
+        // time, so no queue-depth bound exists and capacity is always
+        // available; the byte budget alone paces admissions.
+        true
     }
 
     fn drain(&mut self) -> Result<(), PreadSessionError> {

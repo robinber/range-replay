@@ -13,6 +13,9 @@ clap = { version = "4.6.4", features = ["derive"] }
 sha2 = { version = "0.11.0", default-features = false }
 thiserror = "2.0.19"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+io-uring = { version = "0.7.14", default-features = false }
+
 [lints.rust]
 unsafe_code = "deny"
 elided_lifetimes_in_paths = "deny"
