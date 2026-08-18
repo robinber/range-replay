@@ -73,11 +73,13 @@ Do not describe planned commands, modules, formats, or results as implemented.
 ## Working rules
 
 - This repository is an **educational, bounded** project. Prefer a finished
-  narrow slice over expanding scope. Stopping after `v0.1` is a valid success.
+  narrow slice over expanding scope. Stopping after the terminal `v0.1` gate
+  is required, not merely allowed.
 - Make the smallest change that satisfies the approved request.
 - Work one bounded slice at a time and satisfy its gate before starting another.
-- Do **not** auto-chain into the next milestone. After a gate, the operator
-  chooses continue / side quest / pause.
+- Do **not** auto-chain into the next milestone. After an intermediate gate,
+  the operator chooses continue / side quest / pause; after the terminal gate,
+  stop.
 - Follow existing module boundaries before introducing new abstractions.
 - Work test-first when practical. For bugs, reproduce or localize the root
   cause before editing.
@@ -87,6 +89,36 @@ Do not describe planned commands, modules, formats, or results as implemented.
   machine-specific profiles, or private agent/runtime state.
 - Self-check every design: if a senior engineer would call it overcomplicated,
   simplify it before claiming completion.
+
+## Hard project ceiling
+
+The synchronous `pread` path is complete. Remaining feature and research work
+in this repository is limited to these five deliverables:
+
+1. A Linux `io_uring` backend with the same correctness, typed-error, output,
+   and hard in-flight-byte-budget contracts as `pread`.
+2. One bounded, predeclared workload matrix shared at the logical level by both
+   backends, covering multiple range sizes, a common single-in-flight baseline,
+   multiple bounded concurrency or queue-depth settings, and mostly sequential
+   versus scattered access. Measurement support must stay purpose-built; do not
+   introduce a reusable runtime or general benchmark framework.
+3. One reproducible, machine-specific comparison reporting throughput,
+   latency, logical requested bytes, physical bytes read, operation count, and
+   CPU cost when reliable, with the controls and raw observations required for
+   audit.
+4. One small experiment comparing separate small reads with fewer, larger
+   physical reads for the same logical payload, including over-read and
+   operation-count trade-offs. Do not turn it into an adaptive coalescer,
+   batching subsystem, or auto-tuner.
+5. One final conclusion stating when `pread`, `io_uring`, concurrency, and
+   coalescing help or hurt tensor-loading-like workloads, with explicit limits.
+
+The acceptance details live in the README's terminal scope. After correctness
+parity and the final reproducible report are accepted, stop feature development
+in this repository. Do not open or implement a post-`v0.1` milestone, even when
+the measurements suggest an interesting follow-up. Such a follow-up requires a
+separate operator decision outside this project's scope and must not be added
+to this repository's roadmap.
 
 ## Rust contract
 
@@ -102,10 +134,10 @@ The Cargo lint tables enforce most of this policy, including `clippy::panic`,
 intentional panics when they improve diagnostics; `clippy.toml` allows
 unwrap/expect/panic in tests only.
 
-`io_uring` and other Linux-specific backends will eventually need carefully
-scoped `unsafe`. That is an explicit later decision: introduce it only behind a
-documented safety boundary, with the smallest possible surface, and never as a
-blanket policy relaxation.
+A real `io_uring` backend may need carefully scoped `unsafe`. The backend
+deliverable does not itself approve that policy deviation: obtain the explicit
+decision required by `rust-strict`, keep it behind a documented safety boundary
+with the smallest possible surface, and never use a blanket policy relaxation.
 
 Preferred patterns:
 
@@ -168,9 +200,9 @@ independent review.
 - Do not present one machine's timings as portable defaults.
 - Preserve raw observations needed to audit a reported result.
 
-## Deferred surfaces
+## Excluded surfaces
 
-Until an explicit project decision opens them, do not add:
+Do not add these surfaces to this repository:
 
 - macOS or Windows backends;
 - a reusable async runtime;
@@ -180,8 +212,9 @@ Until an explicit project decision opens them, do not add:
 - `O_DIRECT` or portable cold-cache guarantees;
 - claims of being the fastest possible reader.
 
-These are deliberate non-goals for the first release, not missing scaffolding
-to create in advance.
+These are terminal non-goals for `range-replay`, not missing scaffolding or a
+post-`v0.1` roadmap. Exploring one requires a separate project decision outside
+this repository.
 
 ## Commands
 
@@ -247,7 +280,8 @@ Stay small. Prefer one bounded slice with an explicit stop condition:
 3. Prove correctness and reproducibility with tests or fixtures when useful.
 4. Record what ran, what passed, and what remains open.
 5. Pause before scope expansion, merge, publication, or any irreversible
-   action. Default after a closed gate: **pause and re-decide**.
+   action. After an intermediate gate, **pause and re-decide**; after the
+   terminal report gate, stop with no next slice.
 
 Close a slice only from reviewable evidence. Prefer several small changes over
 one long march through the roadmap.
@@ -289,11 +323,12 @@ When coordinating work through Kira:
 Before claiming a change complete, confirm that:
 
 - it belongs to the active slice (not an unrequested later exploration);
-- no deferred surface or unnecessary crate split was introduced;
+- no excluded surface or unnecessary crate split was introduced;
 - correctness invariants still hold;
 - deterministic and provenance requirements are covered;
 - public items and behavior changes are documented;
 - relevant format, lint, test, rustdoc, and dependency-policy checks were run;
 - exact verification evidence and gaps are reported;
 - unrelated worktree changes were left untouched;
-- the next gate, not merely the implementation task, is explicit.
+- the next gate is explicit, or the terminal gate is recorded with no next
+  slice.

@@ -107,23 +107,44 @@ bytes the stream already accepted cannot be retracted.
 The project is deliberately bounded. It is a Rust and Linux systems-learning
 exercise, not a production storage engine or a general-purpose async runtime.
 
-## Planned `v0.1`
+## Terminal `v0.1` scope
 
-This list is the full `v0.1` scope; the Status section above tracks which
-items already exist.
+This is the complete scope of the project. The synchronous `pread` path and
+the shared planning, scheduling, validation, and output foundations already
+exist. They may change only where the remaining comparison needs a correctness
+fix or the smallest backend-neutral measurement seam.
 
-- An explicit file-range schedule format.
-- Deterministic validation and coalescing of overlapping or adjacent ranges.
-- A synchronous `pread` reference backend.
-- A fail-closed library executor driving the budget-aware physical plan
-  (`execute_pread`).
-- A minimal synchronous command line exposing the pipeline.
-- An `io_uring` backend with a strict in-flight byte budget.
-- Typed errors for invalid ranges, overflow, EOF, partial reads, and I/O
-  failures.
-- Checksums proving that both backends returned the same bytes.
-- Deterministic reports for plans, byte counts, and operation counts.
-- One machine-specific measurement report from an NVIDIA DGX Spark.
+The only remaining work is:
+
+1. Implement a Linux `io_uring` backend under the same typed-error, exact-byte,
+   output-assembly, and hard in-flight-budget contracts as `pread`. Both
+   backends must consume the same logical workloads and return identical bytes
+   and checksums.
+2. Run one bounded, predeclared comparison matrix covering multiple logical
+   range sizes, multiple bounded concurrency or queue-depth settings, and both
+   mostly sequential and scattered offsets. A common single-in-flight row must
+   compare the backends directly; additional depths may isolate the effect of
+   `io_uring` concurrency. Paired runs keep the data file, logical schedule,
+   physical read size, byte budget, repetitions, and cache conditions fixed
+   except for the named comparison axis.
+3. Report throughput and latency, logical bytes requested, physical bytes
+   actually read, physical operation count, and CPU cost when it can be
+   measured reliably. Record the machine, OS, kernel, cache conditions, exact
+   commands, and raw observations needed to audit the results.
+4. Run one small coalescing or batching experiment over the same logical
+   payload: compare separate small reads with fewer, larger physical reads, and
+   report the trade-off in useful bytes, over-read bytes, operations, latency,
+   and throughput. This is an experiment, not an adaptive policy or tuning
+   framework.
+5. Write one clear, machine-scoped conclusion describing when `pread`,
+   `io_uring`, added concurrency, and coalescing help or hurt workloads that
+   resemble tensor loading, including the limits of the evidence.
+
+The terminal gate is backend correctness parity plus that reproducible report
+and conclusion. Once it is satisfied, `range-replay` stops: do not add a later
+milestone, another backend, an async runtime, an auto-tuner, or follow-on
+optimizations to this repository. An interesting result may be documented as a
+limitation, but it does not authorize more implementation here.
 
 ## Correctness boundary
 
@@ -136,7 +157,7 @@ presented as deterministic or portable results.
 
 ## Non-goals
 
-The first version will not include:
+This repository will not include:
 
 - macOS or Windows backends;
 - a reusable async runtime;
@@ -152,6 +173,5 @@ Development will happen through small reviewable pull requests. Each slice
 must have a hand-calculated example, focused tests, and an explanation of the
 Rust ownership or safety invariant it introduces.
 
-The project stops after the two backends agree on correctness, the in-flight
-budget is enforced, and one reproducible Linux report is documented. Further
-optimization requires a new explicit project decision.
+The project stops after the terminal gate in the scope above. There is no next
+implementation milestone in this repository.
