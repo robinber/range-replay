@@ -101,7 +101,8 @@ The synchronous `pread` path is complete. Remaining feature and research work
 in this repository is limited to these five deliverables:
 
 1. A Linux `io_uring` backend with the same correctness, typed-error, output,
-   and hard in-flight-byte-budget contracts as `pread`.
+   and hard in-flight-byte-budget contracts as `pread`. (Delivered; see the
+   module inventory above and the README status.)
 2. One bounded, predeclared workload matrix shared at the logical level by both
    backends, covering multiple range sizes, a common single-in-flight baseline,
    multiple bounded concurrency or queue-depth settings, and mostly sequential

@@ -332,7 +332,10 @@ pub enum UringExecutionError {
     /// or foreign completion — and is never ignored: the session stops
     /// accepting submissions, drains every known operation first, and
     /// only then reports this error, so no tracked buffer is ever freed
-    /// while its own completion could still be pending.
+    /// while its own completion could still be pending. Successful
+    /// drainage completions are destroyed without being recorded; each
+    /// failed one is preserved by nesting a [`Self::DrainageFailed`]
+    /// layer around this error, which always stays the innermost cause.
     #[error("an io_uring completion arrived for unknown token {token}")]
     UnknownCompletionToken {
         /// The token no tracked operation owns.
@@ -392,6 +395,8 @@ pub enum UringExecutionError {
     /// Draining the session after a primary failure reported an
     /// additional failure.
     ///
+    /// Both the driver's fail-closed drainage and the session's
+    /// internal unknown-token drainage nest through this variant.
     /// The primary failure stays the source of this variant, so the
     /// cause chain always surfaces what originally failed; the drainage
     /// failure is a sibling field outside the
@@ -470,6 +475,12 @@ enum UringSessionError {
     NothingActive,
     /// Idleness is unprovable because operations were abandoned.
     DrainageUnproven { abandoned: usize },
+    /// Internal drainage after a primary failure reported an additional
+    /// failure.
+    DrainageFailed {
+        primary: Box<UringSessionError>,
+        drainage: Box<UringSessionError>,
+    },
 }
 
 impl From<UringSessionError> for UringExecutionError {
@@ -535,6 +546,10 @@ impl From<UringSessionError> for UringExecutionError {
             UringSessionError::DrainageUnproven { abandoned } => {
                 Self::DrainageUnproven { abandoned }
             }
+            UringSessionError::DrainageFailed { primary, drainage } => Self::DrainageFailed {
+                primary: Box::new((*primary).into()),
+                drainage: Box::new((*drainage).into()),
+            },
         }
     }
 }
@@ -601,6 +616,13 @@ trait Ring {
     /// Blocks until one completion is available, publishing any still
     /// pending SQEs first, and returns its token and signed result.
     fn wait_completion(&mut self) -> io::Result<RingCompletion>;
+
+    /// Test-only probe called immediately after the operation for
+    /// `token` was inserted into the session's token table and before
+    /// its SQE is pushed, so insertion-before-push stays a tested
+    /// invariant instead of a reviewed one.
+    #[cfg(test)]
+    fn note_tracked(&mut self, _token: u64) {}
 }
 
 /// The production [`Ring`] over one kernel `io_uring` instance.
@@ -777,31 +799,23 @@ impl<R: Ring> UringSession<R> {
         completion: RingCompletion,
     ) -> Result<CompletedRead, UringSessionError> {
         let Some(entry) = self.in_flight.remove(&completion.token) else {
-            self.poisoned = true;
-
-            while !self.in_flight.is_empty() {
-                match self.ring.wait_completion() {
-                    Ok(drained) => drop(self.in_flight.remove(&drained.token)),
-                    Err(_source) => {
-                        // The typed protocol error below stays primary;
-                        // the leak surfaces as unproven drainage when the
-                        // driver drains the session.
-                        self.abandon_in_flight();
-                        break;
-                    }
-                }
-            }
-
-            return Err(UringSessionError::UnknownCompletionToken {
-                token: completion.token,
-            });
+            return Err(self.drain_after_unknown_token(completion.token));
         };
 
+        Self::adjudicate_entry(entry, completion.result)
+    }
+
+    /// Adjudicates the signed result of one removed operation into an
+    /// exact completion or the typed error that destroys it.
+    ///
+    /// Every error path drops the whole entry, whose field order
+    /// destroys the physical buffer before the reservation releases.
+    fn adjudicate_entry(entry: InFlight, result: i32) -> Result<CompletedRead, UringSessionError> {
         let range = entry.scheduled.range();
         let expected = range.length();
 
-        let Ok(reported) = u64::try_from(completion.result) else {
-            let errno = completion.result.checked_neg().unwrap_or(i32::MAX);
+        let Ok(reported) = u64::try_from(result) else {
+            let errno = result.checked_neg().unwrap_or(i32::MAX);
             drop(entry);
 
             return Err(UringSessionError::CompletionIo {
@@ -842,6 +856,61 @@ impl<R: Ring> UringSession<R> {
                 actual: mismatch.actual,
             }
         })
+    }
+
+    /// Drains every known operation after an unknown token, preserving
+    /// each later failure by nesting it around the protocol error.
+    ///
+    /// The unknown token proves the session protocol broken, so the
+    /// session poisons itself and reaches a safe state before the error
+    /// becomes observable: every known operation is awaited, successful
+    /// drainage completions are destroyed without being recorded, each
+    /// failed one — including a further unknown token — nests its typed
+    /// error around the primary protocol error, and a failing wait
+    /// abandons the remainder by leaking while preserving the wait
+    /// failure in the same chain. The innermost failure of the returned
+    /// chain is always the original unknown token.
+    fn drain_after_unknown_token(&mut self, token: u64) -> UringSessionError {
+        self.poisoned = true;
+
+        let mut failure = UringSessionError::UnknownCompletionToken { token };
+
+        while !self.in_flight.is_empty() {
+            let additional = match self.ring.wait_completion() {
+                Ok(drained) => match self.in_flight.remove(&drained.token) {
+                    Some(entry) => match Self::adjudicate_entry(entry, drained.result) {
+                        Ok(completed) => {
+                            drop(completed);
+                            continue;
+                        }
+                        Err(additional) => additional,
+                    },
+                    None => UringSessionError::UnknownCompletionToken {
+                        token: drained.token,
+                    },
+                },
+                Err(source) => {
+                    let abandoned = self.abandon_in_flight();
+
+                    failure = UringSessionError::DrainageFailed {
+                        primary: Box::new(failure),
+                        drainage: Box::new(UringSessionError::CompletionWaitFailed {
+                            source,
+                            abandoned,
+                        }),
+                    };
+
+                    break;
+                }
+            };
+
+            failure = UringSessionError::DrainageFailed {
+                primary: Box::new(failure),
+                drainage: Box::new(additional),
+            };
+        }
+
+        failure
     }
 }
 
@@ -891,6 +960,9 @@ impl<R: Ring> BackendSession for UringSession<R> {
         // The entry is tracked before the SQE exists, so a completion
         // can never arrive for an untracked token, and the buffer
         // pointer taken here stays valid under the table's ownership.
+        #[cfg(test)]
+        self.ring.note_tracked(token);
+
         if self
             .ring
             .push_read(token, &mut entry.buffer, range.offset())
@@ -1076,6 +1148,16 @@ mod tests {
         scheduler_for, span, with_file_content,
     };
 
+    /// One safety-critical submission step, recorded in occurrence
+    /// order so the insertion-before-push invariant stays observable.
+    #[derive(Debug, PartialEq, Eq)]
+    enum OrderEvent {
+        /// The session inserted the operation into its token table.
+        Tracked(u64),
+        /// The ring accepted the operation's SQE push.
+        Pushed(u64),
+    }
+
     /// One scripted outcome for one `wait_completion` call, in call
     /// order.
     enum WaitScript {
@@ -1096,6 +1178,7 @@ mod tests {
     struct ScriptedRing {
         file: Vec<u8>,
         pushes: Vec<(u64, u64, usize)>,
+        order: Vec<OrderEvent>,
         submissions: usize,
         reject_next_push: bool,
         fail_next_submit: Option<ErrorKind>,
@@ -1107,6 +1190,7 @@ mod tests {
             Self {
                 file: file.to_vec(),
                 pushes: Vec::new(),
+                order: Vec::new(),
                 submissions: 0,
                 reject_next_push: false,
                 fail_next_submit: None,
@@ -1133,6 +1217,7 @@ mod tests {
             }
 
             self.pushes.push((token, offset, buffer.len()));
+            self.order.push(OrderEvent::Pushed(token));
 
             Ok(())
         }
@@ -1156,6 +1241,10 @@ mod tests {
                 WaitScript::Cqe { token, result } => Ok(RingCompletion { token, result }),
                 WaitScript::Fail(kind) => Err(io::Error::from(kind)),
             }
+        }
+
+        fn note_tracked(&mut self, token: u64) {
+            self.order.push(OrderEvent::Tracked(token));
         }
     }
 
@@ -1194,6 +1283,14 @@ mod tests {
         assert_eq!(session.ring.submissions, 1);
         assert!(session.has_active());
         assert!(!session.has_submission_capacity());
+
+        // The token table tracks the operation before its SQE is
+        // pushed, so a completion can never arrive for an untracked
+        // token; this ordering underpins the unsafe push's proof.
+        assert_eq!(
+            session.ring.order,
+            vec![OrderEvent::Tracked(0), OrderEvent::Pushed(0)]
+        );
     }
 
     #[test]
@@ -1221,6 +1318,37 @@ mod tests {
             .submit(ready(&mut scheduler))
             .expect("the session stays usable after a pre-publication rollback");
         assert_eq!(session.ring.pushes, vec![(1, 4, 4)]);
+
+        // Even the rejected operation was tracked before its push was
+        // attempted, and the rollback removed it again afterwards.
+        assert_eq!(
+            session.ring.order,
+            vec![
+                OrderEvent::Tracked(0),
+                OrderEvent::Tracked(1),
+                OrderEvent::Pushed(1),
+            ]
+        );
+    }
+
+    #[test]
+    fn dropping_a_session_with_a_tracked_read_leaks_it_instead_of_freeing() {
+        let mut scheduler = scheduler_for(execution(&[span(10, 14)], 4, 4));
+        let mut session = session_over(HEX_FIXTURE, 1, Vec::new());
+        session
+            .submit(ready(&mut scheduler))
+            .expect("the single read submits");
+        assert_eq!(scheduler.in_flight_bytes(), 4);
+
+        // The kernel may still write into the tracked buffer, so the
+        // last-resort Drop guard must leak the entry: freeing it would
+        // release the reservation, which this assertion would observe.
+        drop(session);
+        assert_eq!(
+            scheduler.in_flight_bytes(),
+            4,
+            "the Drop guard leaks a still-tracked operation instead of freeing it"
+        );
     }
 
     #[test]
@@ -1510,6 +1638,116 @@ mod tests {
             scheduler.in_flight_bytes(),
             0,
             "the refused admission released its reservation"
+        );
+    }
+
+    #[test]
+    fn a_failed_read_drained_after_an_unknown_token_stays_observable() {
+        let mut scheduler = scheduler_for(execution(&[span(0, 8)], 4, 8));
+        let mut session = session_over(
+            HEX_FIXTURE,
+            2,
+            vec![
+                WaitScript::Cqe {
+                    token: 99,
+                    result: 4,
+                },
+                WaitScript::Cqe {
+                    token: 0,
+                    result: -5,
+                },
+                WaitScript::Cqe {
+                    token: 1,
+                    result: 4,
+                },
+            ],
+        );
+        session
+            .submit(ready(&mut scheduler))
+            .expect("the first read submits");
+        session
+            .submit(ready(&mut scheduler))
+            .expect("the second read submits");
+
+        // The unknown token stays the innermost primary failure; the
+        // known read that fails during the internal drainage is
+        // preserved by nesting, and the exact one is destroyed without
+        // being recorded.
+        let error = session
+            .wait_for_completion()
+            .expect_err("an unknown token is a protocol breach");
+
+        let UringSessionError::DrainageFailed { primary, drainage } = error else {
+            panic!("expected a nested drainage failure, got {error:?}");
+        };
+        assert!(matches!(
+            *primary,
+            UringSessionError::UnknownCompletionToken { token: 99 }
+        ));
+        let UringSessionError::CompletionIo { range, source } = *drainage else {
+            panic!("expected the drained read's I/O failure, got {drainage:?}");
+        };
+        assert_eq!(range, span(0, 4));
+        assert_eq!(source.raw_os_error(), Some(5));
+
+        assert!(!session.has_active(), "every known read was drained");
+        assert_eq!(scheduler.in_flight_bytes(), 0);
+        session
+            .drain()
+            .expect("the drained session proves idleness");
+    }
+
+    #[test]
+    fn a_wait_failure_during_unknown_token_drainage_stays_observable() {
+        let mut scheduler = scheduler_for(execution(&[span(10, 14)], 4, 4));
+        let mut session = session_over(
+            HEX_FIXTURE,
+            1,
+            vec![
+                WaitScript::Cqe {
+                    token: 99,
+                    result: 4,
+                },
+                WaitScript::Fail(ErrorKind::Other),
+            ],
+        );
+        session
+            .submit(ready(&mut scheduler))
+            .expect("the single read submits");
+
+        // The internal drainage wait fails, so the known read is
+        // abandoned by leaking; both the protocol error and the wait
+        // failure stay observable in one nested chain.
+        let error = session
+            .wait_for_completion()
+            .expect_err("an unknown token is a protocol breach");
+
+        let UringSessionError::DrainageFailed { primary, drainage } = error else {
+            panic!("expected a nested drainage failure, got {error:?}");
+        };
+        assert!(matches!(
+            *primary,
+            UringSessionError::UnknownCompletionToken { token: 99 }
+        ));
+        assert!(matches!(
+            *drainage,
+            UringSessionError::CompletionWaitFailed { abandoned: 1, .. }
+        ));
+
+        assert!(!session.has_active(), "the abandoned read is untracked");
+        let error = session
+            .drain()
+            .expect_err("idleness is unprovable after abandonment");
+        assert!(matches!(
+            error,
+            UringSessionError::DrainageUnproven { abandoned: 1 }
+        ));
+
+        drop(session);
+        assert_eq!(
+            scheduler.in_flight_bytes(),
+            4,
+            "the abandoned read's buffer and reservation stay leaked"
         );
     }
 

@@ -129,7 +129,9 @@ The only remaining work is:
 1. Implement a Linux `io_uring` backend under the same typed-error, exact-byte,
    output-assembly, and hard in-flight-budget contracts as `pread`. Both
    backends must consume the same logical workloads and return identical bytes
-   and checksums.
+   and checksums. *Delivered: the library backend exists and the differential
+   suite proves backend parity (see Status); the measured comparison itself is
+   item 2.*
 2. Run one bounded, predeclared comparison matrix covering multiple logical
    range sizes, multiple bounded concurrency or queue-depth settings, and both
    mostly sequential and scattered offsets. A common single-in-flight row must
