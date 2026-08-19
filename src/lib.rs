@@ -12,8 +12,10 @@
 //! bounded `io_uring` correctness backend (`execute_uring`,
 //! `UringQueueDepth`, `UringExecutionError`) drives the same fail-closed
 //! executor with real kernel concurrency under the same hard byte budget;
-//! backend selection, measurements, and comparison reports do not exist
-//! yet. The binary stays a thin CLI over the library.
+//! the library itself exposes no backend-selection or measurement framework.
+//! A separate Linux-only binary owns the fixed terminal comparison matrix and
+//! coalescing experiment, while their machine-specific report remains open.
+//! The user-facing binary stays a thin CLI over the library.
 #![expect(
     unused_crate_dependencies,
     reason = "`clap` is used by the binary target of this single-package application"

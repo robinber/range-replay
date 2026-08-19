@@ -63,6 +63,11 @@ silently choose the interpretation that permits more work.
     test_support.rs shared cfg(test) test fixtures (ranges, plans, schedulers,
                  temporary files)
     main.rs      thin binary entrypoint
+    bin/range-replay-measure/
+                 Linux-only, purpose-built terminal comparison runner with a
+                 fixed workload matrix, one fixed-payload coalescing
+                 experiment, process CPU-tick accounting, raw TSV rendering,
+                 and portable pure-logic tests
   ```
 
   The parentheticals name flagship items, not exhaustive export lists;

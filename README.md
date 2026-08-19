@@ -51,9 +51,11 @@ exported item and its exact contract.
 
 The byte budget limits the physical read buffers simultaneously in flight,
 not the final logical output buffers or total process memory. The library
-now has an `io_uring` correctness backend, but no CLI backend selector,
-workload matrix, comparison report, measurement report, or displayed
-checksum exists yet; the CLI still executes only the `pread` backend.
+now has an `io_uring` correctness backend, and the Linux-only
+`range-replay-measure` binary owns one fixed terminal comparison matrix. No
+comparison report, accepted machine-specific measurement report, or displayed
+checksum exists yet; the user-facing `range-replay` CLI still executes only
+the `pread` backend.
 
 ## Usage
 
@@ -124,6 +126,79 @@ bytes the stream already accepted cannot be retracted.
 The project is deliberately bounded. It is a Rust and Linux systems-learning
 exercise, not a production storage engine or a general-purpose async runtime.
 
+## Bounded measurement runner
+
+`range-replay-measure` is purpose-built for the terminal `v0.1` comparison; it
+is not a reusable benchmark framework. Its matrix is fixed in source before a
+measurement starts:
+
+- 256 MiB of logical payload per workload;
+- logical range sizes of 4 KiB, 64 KiB, and 1 MiB;
+- mostly sequential offsets separated by one byte, or deterministic scattered
+  offsets distributed across four times the logical span;
+- physical read size equal to the logical range size;
+- one constant byte budget per workload equal to 16 physical reads;
+- `pread` as the single-executing-read reference, and `io_uring` at submitted
+  depths 1, 4, and 16;
+- one complete warm-up per row followed by eight measured repetitions, with
+  backend order rotated over each four-repetition cycle.
+
+The depth-1 rows are the paired backend baseline. The deeper `io_uring` rows
+change only submitted depth: the data file, logical schedule, read size, byte
+budget, repetitions, and warm-cache policy stay equal inside a workload. The
+canonical plan sorts both patterns by offset; “scattered” therefore means
+sparse offsets distributed across the file, not randomized issue order.
+
+Every timed call includes the current backend facade, including creation of a
+fresh ring for `io_uring`, execution, and logical output assembly. Plan
+construction, output comparison, hashing, metric collection, and rendering are
+outside the wall-clock interval. Every result is compared byte-for-byte with
+the workload's warm-up `pread` output before any successful TSV is emitted.
+
+The runner requires an existing regular data file large enough for the fixed
+matrix. A 2 GiB file is sufficient. Record the Linux clock rate separately,
+then build and run in release mode:
+
+```bash
+getconf CLK_TCK
+cargo build --release --bin range-replay-measure
+./target/release/range-replay-measure \
+  --clock-ticks-per-second 100 \
+  /absolute/path/to/data.bin > raw-observations.tsv
+```
+
+Replace `100` with the recorded `getconf` result. The TSV records warm-up and
+measured rows separately: elapsed nanoseconds, logical and physical bytes,
+physical operation count, integer throughput, user/system CPU ticks and their
+nanosecond conversion, the complete-output SHA-256, and byte-equality status.
+CPU ticks retain the kernel clock's quantization and must not be presented with
+more precision than that source provides.
+
+This runner intentionally implements only a warm-page-cache condition. It does
+not claim portable cold-cache control, and one VM's timings are never defaults
+for another machine.
+
+The same binary also owns the one fixed coalescing experiment. It keeps
+256 MiB of useful payload as 65,536 blocks of 4 KiB separated by 4 KiB gaps,
+then compares two physical layouts at `pread` and `io_uring` depth 1:
+
+- `separate_4k`: 65,536 physical 4 KiB reads, 256 MiB read, no over-read;
+- `grouped_16`: 4,096 physical 124 KiB reads, each spanning 16 useful blocks
+  and 15 gaps, for 496 MiB read and 240 MiB of explicit over-read.
+
+Both layouts use the same 1,984 KiB byte budget, one warm-up, eight measured
+repetitions, and a balanced row order. The timed interval includes backend
+execution, reconstruction of the same contiguous useful payload, and release
+of all physical outputs. Every row must match the separate-`pread` reference
+before the successful TSV is emitted:
+
+```bash
+./target/release/range-replay-measure \
+  --clock-ticks-per-second 100 \
+  --experiment coalescing \
+  /absolute/path/to/data.bin > raw-coalescing.tsv
+```
+
 ## Terminal `v0.1` scope
 
 This is the complete scope of the project. The synchronous `pread` path and
@@ -145,7 +220,8 @@ The only remaining work is:
    compare the backends directly; additional depths may isolate the effect of
    `io_uring` concurrency. Paired runs keep the data file, logical schedule,
    physical read size, byte budget, repetitions, and cache conditions fixed
-   except for the named comparison axis.
+   except for the named comparison axis. *The fixed Linux runner, matrix, and
+   one VPS run now exist; the reproducible report remains open.*
 3. Report throughput and latency, logical bytes requested, physical bytes
    actually read, physical operation count, and CPU cost when it can be
    measured reliably. Record the machine, OS, kernel, cache conditions, exact
@@ -154,7 +230,8 @@ The only remaining work is:
    payload: compare separate small reads with fewer, larger physical reads, and
    report the trade-off in useful bytes, over-read bytes, operations, latency,
    and throughput. This is an experiment, not an adaptive policy or tuning
-   framework.
+   framework. *The fixed experiment runner and one VPS run now exist; the
+   reproducible report remains open.*
 5. Write one clear, machine-scoped conclusion describing when `pread`,
    `io_uring`, added concurrency, and coalescing help or hurt workloads that
    resemble tensor loading, including the limits of the evidence.
