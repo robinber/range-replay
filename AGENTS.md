@@ -74,6 +74,9 @@ silently choose the interpretation that permits more work.
   `src/lib.rs` is the authoritative public surface.
 
 - `Cargo.lock` is committed because this package builds an application.
+- [`REPORT.md`](REPORT.md) is the accepted terminal machine-specific report;
+  [`results/v0.1/`](results/v0.1/) contains its small intentional raw
+  observations and GNU `time` captures.
 - Do not introduce a multi-crate workspace until there is a demonstrated need
   (isolated dependencies, multiple binaries with different graphs, or a clear
   ownership boundary with more than one consumer).
@@ -123,6 +126,11 @@ in this repository is limited to these five deliverables:
    batching subsystem, or auto-tuner.
 5. One final conclusion stating when `pread`, `io_uring`, concurrency, and
    coalescing help or hurt tensor-loading-like workloads, with explicit limits.
+
+All five deliverables now have implementation, clean-commit VPS captures, raw
+observations, and a conclusion in [`REPORT.md`](REPORT.md). The operator
+accepted the terminal report on 2026-08-19. The terminal stop applies and
+feature development has ended.
 
 The acceptance details live in the README's terminal scope. After correctness
 parity and the final reproducible report are accepted, stop feature development

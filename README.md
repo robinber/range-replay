@@ -9,9 +9,10 @@ file-range read schedules on Linux.
 
 ## Status
 
-**Early implementation.** The whole synchronous path exists as a library;
-the crate rustdoc (`cargo doc`) is the authoritative description of every
-exported item and its exact contract.
+**Terminal `v0.1` complete.** The bounded implementation, two machine-specific
+experiments, reproducible evidence, and final conclusion are recorded in
+[`REPORT.md`](REPORT.md). The crate rustdoc (`cargo doc`) remains the
+authoritative description of every exported item and its exact contract.
 
 - Validated `ReadRange` values, deterministic coalescing, the textual
   `offset,length` schedule format (`parse_schedule`), and the validated
@@ -52,10 +53,11 @@ exported item and its exact contract.
 The byte budget limits the physical read buffers simultaneously in flight,
 not the final logical output buffers or total process memory. The library
 now has an `io_uring` correctness backend, and the Linux-only
-`range-replay-measure` binary owns one fixed terminal comparison matrix. No
-comparison report, accepted machine-specific measurement report, or displayed
-checksum exists yet; the user-facing `range-replay` CLI still executes only
-the `pread` backend.
+`range-replay-measure` binary owns one fixed terminal comparison matrix and one
+fixed coalescing experiment. The accepted report and immutable raw observations
+are available in [`REPORT.md`](REPORT.md) and
+[`results/v0.1/`](results/v0.1/); the user-facing `range-replay` CLI still
+executes only the `pread` backend and does not display checksums.
 
 ## Usage
 
@@ -199,6 +201,9 @@ before the successful TSV is emitted:
   /absolute/path/to/data.bin > raw-coalescing.tsv
 ```
 
+The canonical machine-specific run, raw observations, limitations, and final
+conclusion are recorded in [`REPORT.md`](REPORT.md).
+
 ## Terminal `v0.1` scope
 
 This is the complete scope of the project. The synchronous `pread` path and
@@ -206,7 +211,7 @@ the shared planning, scheduling, validation, and output foundations already
 exist. They may change only where the remaining comparison needs a correctness
 fix or the smallest backend-neutral measurement seam.
 
-The only remaining work is:
+The terminal deliverables are:
 
 1. Implement a Linux `io_uring` backend under the same typed-error, exact-byte,
    output-assembly, and hard in-flight-budget contracts as `pread`. Both
@@ -220,25 +225,23 @@ The only remaining work is:
    compare the backends directly; additional depths may isolate the effect of
    `io_uring` concurrency. Paired runs keep the data file, logical schedule,
    physical read size, byte budget, repetitions, and cache conditions fixed
-   except for the named comparison axis. *The fixed Linux runner, matrix, and
-   one VPS run now exist; the reproducible report remains open.*
+   except for the named comparison axis. *Delivered.*
 3. Report throughput and latency, logical bytes requested, physical bytes
    actually read, physical operation count, and CPU cost when it can be
    measured reliably. Record the machine, OS, kernel, cache conditions, exact
-   commands, and raw observations needed to audit the results.
+   commands, and raw observations needed to audit the results. *Delivered in
+   [`REPORT.md`](REPORT.md) and [`results/v0.1/`](results/v0.1/).*
 4. Run one small coalescing or batching experiment over the same logical
    payload: compare separate small reads with fewer, larger physical reads, and
    report the trade-off in useful bytes, over-read bytes, operations, latency,
    and throughput. This is an experiment, not an adaptive policy or tuning
-   framework. *The fixed experiment runner and one VPS run now exist; the
-   reproducible report remains open.*
+   framework. *Delivered.*
 5. Write one clear, machine-scoped conclusion describing when `pread`,
    `io_uring`, added concurrency, and coalescing help or hurt workloads that
-   resemble tensor loading, including the limits of the evidence.
+   resemble tensor loading, including the limits of the evidence. *Delivered.*
 
-The terminal gate is backend correctness parity plus that reproducible report
-and conclusion. Once it is satisfied, `range-replay` stops: do not add a later
-milestone, another backend, an async runtime, an auto-tuner, or follow-on
+The terminal gate is accepted and `range-replay` is complete. Do not add a
+later milestone, another backend, an async runtime, an auto-tuner, or follow-on
 optimizations to this repository. An interesting result may be documented as a
 limitation, but it does not authorize more implementation here.
 

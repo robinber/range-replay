@@ -21,7 +21,13 @@
 # Local datasets and generated results
 /data/
 /datasets/
-/results/
+/results/*
+!/results/v0.1/
+/results/v0.1/*
+!/results/v0.1/vps-comparison.tsv
+!/results/v0.1/vps-comparison-time.txt
+!/results/v0.1/vps-coalescing.tsv
+!/results/v0.1/vps-coalescing-time.txt
 /benchmarks/output/
 /device-profiles/local/
 
