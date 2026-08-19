@@ -829,25 +829,14 @@ mod tests {
     }
 
     #[test]
-    fn read_scheduled_with_rejects_an_unallocatable_length_before_any_read() {
-        let (scheduler, admission) = admitted_single(0, u64::MAX, u64::MAX);
-        assert_eq!(scheduler.in_flight_bytes(), u64::MAX);
-
-        let error = read_scheduled_with(
-            |_buffer, _offset| panic!("no read is expected before a buffer exists"),
-            admission,
-        )
-        .expect_err("no buffer of u64::MAX bytes can be reserved");
-
-        assert!(matches!(error, ReadError::BufferAllocation { .. }));
-        assert_eq!(scheduler.in_flight_bytes(), 0);
-        assert_eq!(scheduler.available_bytes(), u64::MAX);
-    }
-
-    #[test]
     fn read_range_exact_rejects_an_unallocatable_length() {
         // On 64-bit targets `u64::MAX` converts to `usize`, so the fallible
         // reservation is what must reject the request, before any read runs.
+        // No `ScheduledRead` can carry such a length any more — planning caps
+        // one physical read at `ReadSize::MAX_BYTES` — so the raw range is
+        // the only way to exercise this allocation guard; the budget-release
+        // behavior of a failing scheduled read stays covered by the EOF and
+        // I/O failure tests above.
         let error = read_range_exact(
             |_buffer, _offset| panic!("no read is expected before a buffer exists"),
             range(0, u64::MAX),

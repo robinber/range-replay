@@ -183,6 +183,10 @@ suggestions:
 
 - Invalid ranges, overflows, and empty schedules are rejected with typed errors
   before any backend runs.
+- One physical read is bounded to `ReadSize::MAX_BYTES` (1 GiB), a fixed
+  backend-neutral ceiling kept below Linux's per-read transfer cap. Larger
+  read sizes are rejected with a typed error before any backend runs; larger
+  logical ranges stay valid and split deterministically.
 - Coalescing of overlapping or adjacent ranges is deterministic for equal
   inputs.
 - The in-flight byte budget is a hard limit. Never admit work that would exceed

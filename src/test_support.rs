@@ -51,7 +51,8 @@ pub(crate) fn execution(
     read_size_bytes: u64,
     budget_bytes: u64,
 ) -> ExecutionPlan {
-    let read_size = ReadSize::try_new(read_size_bytes).expect("test read sizes are non-zero");
+    let read_size =
+        ReadSize::try_new(read_size_bytes).expect("test read sizes are within the valid domain");
     let budget = ByteBudget::try_new(budget_bytes).expect("test budgets are non-zero");
     let config = ExecutionConfig::try_new(read_size, budget)
         .expect("test configurations pair a read size with a large enough budget");

@@ -93,7 +93,7 @@ fn ranges(pairs: &[(u64, u64)]) -> Vec<ReadRange> {
 )]
 fn config(read_size: u64, byte_budget: u64) -> ExecutionConfig {
     ExecutionConfig::try_new(
-        ReadSize::try_new(read_size).expect("test read sizes are non-zero"),
+        ReadSize::try_new(read_size).expect("test read sizes are within the valid domain"),
         ByteBudget::try_new(byte_budget).expect("test budgets are non-zero"),
     )
     .expect("test read sizes fit under test budgets")
