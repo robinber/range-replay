@@ -81,6 +81,9 @@ struct FakeSession {
     foreign: Option<CompletedRead>,
     report_no_active: bool,
     fail_drain: bool,
+    /// Bounded submission capacity; `None` reports capacity always
+    /// available, like the synchronous production session.
+    capacity: Option<usize>,
 }
 
 fn fake_session(wait_steps: Vec<WaitStep>) -> (FakeSession, Rc<RefCell<FakeState>>) {
@@ -92,6 +95,7 @@ fn fake_session(wait_steps: Vec<WaitStep>) -> (FakeSession, Rc<RefCell<FakeState
         foreign: None,
         report_no_active: false,
         fail_drain: false,
+        capacity: None,
     };
 
     (session, state)
@@ -191,6 +195,11 @@ impl BackendSession for FakeSession {
         }
 
         !self.state.borrow().active.is_empty()
+    }
+
+    fn has_submission_capacity(&self) -> bool {
+        self.capacity
+            .is_none_or(|capacity| self.state.borrow().active.len() < capacity)
     }
 
     fn drain(&mut self) -> Result<(), FakeFailure> {
@@ -584,6 +593,120 @@ fn a_failing_drain_is_preserved_alongside_the_primary_failure() {
     // The completion pulls already emptied the session before the drain
     // reported its failure.
     assert!(state.borrow().active.is_empty());
+}
+
+#[test]
+fn a_bounded_session_waits_and_records_at_capacity_instead_of_scheduling() {
+    let (mut session, state) = fake_session(vec![
+        WaitStep::Complete(B),
+        WaitStep::Complete(A),
+        WaitStep::Complete(D),
+        WaitStep::Complete(C),
+    ]);
+    session.capacity = Some(2);
+
+    let result = execute_with_session(bdac_plan(), session);
+
+    let outputs = result.expect("the scripted run succeeds");
+    assert_eq!(outputs.len(), 1);
+    assert_eq!(outputs[0].bytes(), BDAC_FIXTURE);
+
+    // The 10-byte budget alone would admit A, B, and the tail D
+    // together, so every submission beyond the second proves the driver
+    // waited for a completion and recorded it before scheduling
+    // replacement work: C follows recording B, D follows recording A.
+    let state = state.borrow();
+    assert_eq!(
+        state.events,
+        vec![
+            Event::Submitted(A),
+            Event::Submitted(B),
+            Event::Completed(B),
+            Event::Submitted(C),
+            Event::Completed(A),
+            Event::Submitted(D),
+            Event::Completed(D),
+            Event::Completed(C),
+        ]
+    );
+    assert!(state.active.is_empty());
+}
+
+#[test]
+fn a_single_slot_session_serializes_every_submission() {
+    let (mut session, state) = fake_session(vec![
+        WaitStep::Complete(A),
+        WaitStep::Complete(B),
+        WaitStep::Complete(C),
+        WaitStep::Complete(D),
+    ]);
+    session.capacity = Some(1);
+
+    let result = execute_with_session(bdac_plan(), session);
+
+    let outputs = result.expect("the scripted run succeeds");
+    assert_eq!(outputs[0].bytes(), BDAC_FIXTURE);
+
+    // Budget never binds here; capacity 1 alone forces one completed and
+    // recorded read before each next submission.
+    assert_eq!(
+        state.borrow().events,
+        vec![
+            Event::Submitted(A),
+            Event::Completed(A),
+            Event::Submitted(B),
+            Event::Completed(B),
+            Event::Submitted(C),
+            Event::Completed(C),
+            Event::Submitted(D),
+            Event::Completed(D),
+        ]
+    );
+}
+
+#[test]
+fn a_completion_failure_at_capacity_keeps_the_primary_and_drains_the_rest() {
+    let (mut session, state) = fake_session(vec![WaitStep::Complete(B), WaitStep::Fail(A)]);
+    session.capacity = Some(2);
+
+    let result = execute_with_session(bdac_plan(), session);
+
+    assert!(matches!(
+        result,
+        Err(DriverFailure::Backend(FakeFailure::Wait(op))) if op == A
+    ));
+
+    // A's terminal failure is primary; the still-active C is drained
+    // through an unscripted completion and destroyed without being
+    // recorded, so no partial output exists.
+    let state = state.borrow();
+    assert_eq!(
+        state.events,
+        vec![
+            Event::Submitted(A),
+            Event::Submitted(B),
+            Event::Completed(B),
+            Event::Submitted(C),
+            Event::CompletionFailed(A),
+            Event::Completed(C),
+            Event::Drained,
+        ]
+    );
+    assert!(state.active.is_empty(), "remaining work was drained");
+}
+
+#[test]
+fn exhausted_capacity_with_nothing_active_is_a_typed_error_instead_of_a_hang() {
+    let (mut session, state) = fake_session(Vec::new());
+    session.capacity = Some(0);
+
+    let result = execute_with_session(bdac_plan(), session);
+
+    assert!(matches!(
+        result,
+        Err(DriverFailure::StalledWithoutActiveWork)
+    ));
+    assert_eq!(state.borrow().events, vec![Event::Drained]);
 }
 
 #[test]

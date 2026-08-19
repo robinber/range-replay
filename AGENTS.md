@@ -47,7 +47,12 @@ silently choose the interpretation that permits more work.
     execution.rs read-size-derived physical planning (`ReadSize`, `ExecutionConfig`, `ExecutionPlan`)
     executor.rs  fail-closed synchronous pread execution over a private backend
                  session (`execute_pread`, `PreadExecutionError`); its tests and
-                 scripted fake session live in executor/tests.rs
+                 scripted fake session live in executor/tests.rs; the Linux-only
+                 bounded io_uring session and facade live in executor/uring.rs
+                 (`execute_uring`, `UringQueueDepth`, `UringExecutionError`),
+                 compiled only for `cfg(target_os = "linux")` together with the
+                 target-specific `io-uring` dependency, and needing a Linux
+                 kernel with io_uring read support (5.6+) at runtime
     output.rs    logical outputs assembled from physical completions (`RangeOutput`, `OutputAssembler`)
     plan.rs      pure planning over range collections (coalescing, `ReadPlan`)
     pread.rs     synchronous positioned-read reference backend (`read_plan`, `read_scheduled`)
@@ -96,7 +101,8 @@ The synchronous `pread` path is complete. Remaining feature and research work
 in this repository is limited to these five deliverables:
 
 1. A Linux `io_uring` backend with the same correctness, typed-error, output,
-   and hard in-flight-byte-budget contracts as `pread`.
+   and hard in-flight-byte-budget contracts as `pread`. (Delivered; see the
+   module inventory above and the README status.)
 2. One bounded, predeclared workload matrix shared at the logical level by both
    backends, covering multiple range sizes, a common single-in-flight baseline,
    multiple bounded concurrency or queue-depth settings, and mostly sequential
@@ -134,10 +140,13 @@ The Cargo lint tables enforce most of this policy, including `clippy::panic`,
 intentional panics when they improve diagnostics; `clippy.toml` allows
 unwrap/expect/panic in tests only.
 
-A real `io_uring` backend may need carefully scoped `unsafe`. The backend
-deliverable does not itself approve that policy deviation: obtain the explicit
-decision required by `rust-strict`, keep it behind a documented safety boundary
-with the smallest possible surface, and never use a blanket policy relaxation.
+The `io_uring` backend carries the one approved `unsafe` deviation (issue
+#40): a single `unsafe` block containing the single SQ push in
+`executor/uring.rs`, scoped with one `#[expect(unsafe_code, reason = ...)]`
+and a `SAFETY` proof of buffer, descriptor, token, and reservation
+ownership. The package-wide `unsafe_code = "deny"` policy stays in force;
+any additional or widened `unsafe` needs its own explicit decision under
+`rust-strict`, and never a blanket policy relaxation.
 
 Preferred patterns:
 

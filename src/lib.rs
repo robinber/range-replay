@@ -8,8 +8,12 @@
 //! deterministic and never touch a file. The synchronous positioned-read
 //! backend ([`read_plan`], [`read_scheduled`]) and the fail-closed executor
 //! ([`execute_pread`]) own the I/O boundary, and logical outputs are
-//! assembled from physical completions by [`OutputAssembler`]. The binary
-//! stays a thin CLI over the library.
+//! assembled from physical completions by [`OutputAssembler`]. On Linux, a
+//! bounded `io_uring` correctness backend (`execute_uring`,
+//! `UringQueueDepth`, `UringExecutionError`) drives the same fail-closed
+//! executor with real kernel concurrency under the same hard byte budget;
+//! backend selection, measurements, and comparison reports do not exist
+//! yet. The binary stays a thin CLI over the library.
 #![expect(
     unused_crate_dependencies,
     reason = "`clap` is used by the binary target of this single-package application"
@@ -37,6 +41,10 @@ pub use crate::execution::{
     ReadSize, ReadSizeError,
 };
 pub use crate::executor::{PreadExecutionError, execute_pread};
+#[cfg(target_os = "linux")]
+pub use crate::executor::{
+    UringExecutionError, UringQueueDepth, UringQueueDepthError, execute_uring,
+};
 pub use crate::output::{AssemblyError, OutputAssembler, RangeOutput};
 pub use crate::plan::{PlanError, ReadPlan, coalesce};
 pub use crate::pread::{ReadError, read_plan, read_scheduled};

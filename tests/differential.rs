@@ -1,10 +1,12 @@
 //! Differential tests proving the reference oracle and the executor agree.
 //!
 //! [`read_plan`] is the synchronous reference oracle; [`execute_pread`] is
-//! the budget-aware executor. For equal inputs the correctness contract
-//! requires identical logical outputs from both — the same canonical ranges
-//! in the same order with byte-for-byte equal payloads — and agreement on a
-//! typed end-of-file failure when the canonical plan crosses EOF. Each
+//! the budget-aware executor, and on Linux [`execute_uring`] is the bounded
+//! `io_uring` backend exercised at several queue depths. For equal inputs
+//! the correctness contract requires identical logical outputs from every
+//! backend — the same canonical ranges in the same order with byte-for-byte
+//! equal payloads — and agreement on a typed end-of-file failure when the
+//! canonical plan crosses EOF. Each
 //! output sequence is compared against the canonical plan itself, not only
 //! against the other backend, so a regression shared by both — omitting,
 //! duplicating, or identically reordering canonical ranges — cannot pass on
@@ -25,8 +27,8 @@
 //!
 //! Hand-calculated cases pin exact expectations; proptest cases sweep small
 //! random files, schedules, and configurations. A failing proptest input is
-//! persisted under `proptest-regressions/`, which must be committed so the
-//! shrunk counterexample replays on every later run.
+//! persisted next to this file in `differential.proptest-regressions`, which
+//! must be committed so the shrunk counterexample replays on every later run.
 #![expect(
     unused_crate_dependencies,
     reason = "only the library target and proptest are exercised by this differential test"
@@ -42,6 +44,8 @@ use range_replay::{
     ByteBudget, ExecutionConfig, ExecutionPlan, PreadExecutionError, RangeOutput, ReadError,
     ReadPlan, ReadRange, ReadSize, execute_pread, read_plan,
 };
+#[cfg(target_os = "linux")]
+use range_replay::{UringExecutionError, UringQueueDepth, execute_uring};
 
 /// Distinguishes concurrently created fixture files within one process.
 static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
@@ -168,6 +172,46 @@ fn assert_backends_agree(data: &[u8], schedule: &[(u64, u64)], read_size: u64, b
             "the oracle matches the in-memory fixture bytes"
         );
     }
+
+    #[cfg(target_os = "linux")]
+    assert_uring_agrees(data, schedule, read_size, byte_budget, &oracle);
+}
+
+/// Asserts the `io_uring` backend returns the oracle's exact outputs at
+/// several queue depths.
+///
+/// Depth 1 is the common single-in-flight baseline; the deeper queue
+/// exercises real kernel concurrency and out-of-order completion under
+/// the same hard byte budget.
+#[cfg(target_os = "linux")]
+#[expect(
+    clippy::expect_used,
+    reason = "test helpers panic with diagnostics like the tests they serve"
+)]
+fn assert_uring_agrees(
+    data: &[u8],
+    schedule: &[(u64, u64)],
+    read_size: u64,
+    byte_budget: u64,
+    oracle: &[RangeOutput],
+) {
+    let plan = ReadPlan::try_from_schedule(&ranges(schedule)).expect("test schedules are valid");
+    let fixture = Fixture::new(data);
+    let file = fs::File::open(&fixture.path).expect("fixture file opens");
+
+    for operations in [1, 3] {
+        let execution = ExecutionPlan::try_from_read_plan(&plan, config(read_size, byte_budget))
+            .expect("valid plans and configurations derive a physical plan");
+        let depth = UringQueueDepth::try_new(operations).expect("test depths are non-zero");
+
+        let outputs = execute_uring(&file, execution, depth)
+            .expect("the io_uring backend reads in-bounds test ranges");
+
+        assert_eq!(
+            outputs, oracle,
+            "io_uring outputs match the oracle at queue depth {operations}"
+        );
+    }
 }
 
 /// Asserts both backends reject a plan crossing EOF with a typed EOF error.
@@ -210,6 +254,36 @@ fn assert_backends_agree_on_eof(
         "the executor reports the EOF through its read stage, not another failure: \
          {executor_error:?}"
     );
+
+    // The io_uring backend never retries a short kernel result, so an
+    // EOF-crossing plan surfaces as either a zero-byte EOF or a short
+    // read on one physical operation — both are the end-of-file
+    // condition itself, never another failure and never partial output.
+    #[cfg(target_os = "linux")]
+    {
+        let execution = ExecutionPlan::try_from_read_plan(&plan, config(read_size, byte_budget))
+            .expect("valid plans and configurations derive a physical plan");
+        let depth = UringQueueDepth::try_new(2).expect("test depths are non-zero");
+
+        let uring_error = execute_uring(&file, execution, depth)
+            .expect_err("the io_uring backend rejects a plan crossing EOF");
+
+        // With a queue depth above one, several physical reads of the
+        // crossing range can fail concurrently: the first failure stays
+        // primary while later ones surface as nested drainage layers, so
+        // the end-of-file condition is asserted on the innermost primary.
+        let mut primary = &uring_error;
+        while let UringExecutionError::DrainageFailed { primary: inner, .. } = primary {
+            primary = inner;
+        }
+        assert!(
+            matches!(
+                primary,
+                UringExecutionError::UnexpectedEof { .. } | UringExecutionError::ShortRead { .. }
+            ),
+            "the io_uring backend reports the end-of-file condition itself: {uring_error:?}"
+        );
+    }
 }
 
 #[test]
