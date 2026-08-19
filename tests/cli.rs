@@ -288,6 +288,24 @@ fn a_zero_byte_budget_takes_precedence_over_missing_data_and_schedule_paths() {
 }
 
 #[test]
+fn a_read_size_above_the_physical_maximum_is_rejected_before_any_file_access() {
+    let missing_data = fixture_path("max-read-size", "missing-data");
+    let missing_schedule = fixture_path("max-read-size", "missing-schedule");
+
+    let output = run_configured("1073741825", "1073741825", &missing_data, &missing_schedule);
+
+    let stderr = stderr_text(&output);
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(stderr.contains("invalid --read-size value 1073741825"));
+    assert!(
+        stderr.contains("read size of 1073741825 bytes exceeds the maximum of 1073741824 bytes")
+    );
+    assert!(!stderr.contains(&missing_data.display().to_string()));
+    assert!(!stderr.contains(&missing_schedule.display().to_string()));
+}
+
+#[test]
 fn a_read_size_exceeding_the_budget_reports_the_exact_values_and_wins_over_missing_paths() {
     let missing_data = fixture_path("oversized-read-size", "missing-data");
     let missing_schedule = fixture_path("oversized-read-size", "missing-schedule");

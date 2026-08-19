@@ -19,9 +19,9 @@ exported item and its exact contract.
 - Deterministic per-range SHA-256 checksums (`checksum`; library-only, the
   CLI neither renders nor compares them).
 - Validated execution configuration and compact physical planning
-  (`ReadSize`, `ByteBudget`, `ExecutionConfig` proves
-  `read_size <= byte_budget`, `ExecutionPlan` computes each physical read
-  on demand).
+  (`ReadSize` bounds one physical read to `1..=1 GiB`, `ByteBudget`,
+  `ExecutionConfig` proves `read_size <= byte_budget`, `ExecutionPlan`
+  computes each physical read on demand).
 - The in-flight byte budget enforced as a hard limit through uniquely
   owned RAII `Reservation` guards (`BudgetLimiter`).
 - Budget-aware greedy scheduling of physical reads (`Scheduler`,
@@ -66,6 +66,13 @@ Both options are required raw decimal byte counts with no default:
 bounds the physical read bytes simultaneously in flight. No KiB/MiB, SI,
 hexadecimal, or expression suffixes are accepted, and the read size must
 not exceed the byte budget.
+
+The read size must lie in `1..=1073741824` bytes (1 GiB). The ceiling is a
+fixed, deterministic cross-backend correctness policy — kept below Linux's
+documented per-read transfer cap so no accepted physical read can be capped
+short by the kernel within one call — not a tuning recommendation. Larger
+logical ranges stay valid and are split into several physical reads. The
+byte budget is an independent policy and may exceed 1 GiB.
 
 The schedule file is UTF-8 text with one `offset,length` line per requested
 range. The configuration is validated first, then the schedule is parsed,

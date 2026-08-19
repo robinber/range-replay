@@ -61,6 +61,19 @@ pub enum ReadSizeError {
     /// progress.
     #[error("read size must be greater than zero")]
     ZeroReadSize,
+    /// The requested read size exceeds [`ReadSize::MAX_BYTES`], so one
+    /// physical read of that length could be capped short by the operating
+    /// system instead of completing exactly.
+    #[error(
+        "read size of {requested} bytes exceeds the maximum of {maximum} bytes for one physical \
+         read"
+    )]
+    ReadSizeExceedsMaximum {
+        /// Exact requested read size in bytes.
+        requested: u64,
+        /// Exact maximum read size in bytes, always [`ReadSize::MAX_BYTES`].
+        maximum: u64,
+    },
 }
 
 /// Reason an [`ExecutionConfig`] could not be constructed.
@@ -80,7 +93,8 @@ pub enum ExecutionConfigError {
     },
 }
 
-/// A validated, non-zero maximum length in bytes for one physical read.
+/// A validated maximum length in bytes for one physical read, always in
+/// `1..=ReadSize::MAX_BYTES`.
 ///
 /// The read size bounds a *single* operation: an [`ExecutionPlan`] splits
 /// every logical range into greedy reads no longer than this value. It is an
@@ -89,10 +103,13 @@ pub enum ExecutionConfigError {
 /// a separate policy owned by [`ByteBudget`]; [`ExecutionConfig`] pairs the
 /// two and guarantees the read size fits under the budget.
 ///
-/// A read size of `0` is rejected at construction: a zero-length read could
-/// never make progress, so it is an invalid configuration rather than a
-/// degenerate plan. `ReadSize` is [`Copy`] because it is immutable
-/// configuration.
+/// Construction rejects both ends of the invalid domain. A read size of `0`
+/// could never make progress, so it is an invalid configuration rather than
+/// a degenerate plan. A read size above [`Self::MAX_BYTES`] could be capped
+/// short by the operating system within one call, so it is rejected before
+/// either backend can observe it; logical ranges larger than the maximum
+/// stay valid and split into several physical reads. `ReadSize` is [`Copy`]
+/// because it is immutable configuration.
 ///
 /// # Examples
 ///
@@ -103,6 +120,13 @@ pub enum ExecutionConfigError {
 /// assert_eq!(read_size.bytes(), 4);
 ///
 /// assert_eq!(ReadSize::try_new(0), Err(ReadSizeError::ZeroReadSize));
+/// assert_eq!(
+///     ReadSize::try_new(ReadSize::MAX_BYTES + 1),
+///     Err(ReadSizeError::ReadSizeExceedsMaximum {
+///         requested: ReadSize::MAX_BYTES + 1,
+///         maximum: ReadSize::MAX_BYTES,
+///     })
+/// );
 /// # Ok::<(), ReadSizeError>(())
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -111,21 +135,41 @@ pub struct ReadSize {
 }
 
 impl ReadSize {
+    /// Largest accepted length in bytes for one physical read: 1 GiB.
+    ///
+    /// The ceiling is a fixed, backend-neutral validity bound shared by the
+    /// `pread` and `io_uring` backends, chosen deliberately below Linux's
+    /// documented per-call transfer cap so no accepted physical read can be
+    /// capped short by the kernel within one call. It is a hard constant
+    /// rather than a host-probed value, so equal inputs produce the same
+    /// physical plan on every machine, and it is a correctness policy, not a
+    /// recommended read size. Logical ranges larger than the maximum remain
+    /// valid: planning splits them into several physical reads.
+    pub const MAX_BYTES: u64 = 1 << 30;
+
     /// Creates a read size allowing physical reads of up to `bytes` bytes.
     ///
     /// # Errors
     ///
-    /// Returns [`ReadSizeError::ZeroReadSize`] when `bytes` is `0`.
+    /// Returns [`ReadSizeError::ZeroReadSize`] when `bytes` is `0`, and
+    /// [`ReadSizeError::ReadSizeExceedsMaximum`] with the exact requested
+    /// and maximum values when `bytes` exceeds [`Self::MAX_BYTES`].
     pub const fn try_new(bytes: u64) -> Result<Self, ReadSizeError> {
         if bytes == 0 {
             return Err(ReadSizeError::ZeroReadSize);
+        }
+        if bytes > Self::MAX_BYTES {
+            return Err(ReadSizeError::ReadSizeExceedsMaximum {
+                requested: bytes,
+                maximum: Self::MAX_BYTES,
+            });
         }
 
         Ok(Self { bytes })
     }
 
-    /// Returns the maximum physical read length, which is always at least
-    /// `1`.
+    /// Returns the maximum physical read length, which is always in
+    /// `1..=Self::MAX_BYTES`.
     #[must_use]
     pub const fn bytes(&self) -> u64 {
         self.bytes
@@ -511,7 +555,7 @@ mod tests {
     const TEBIBYTE: u64 = 1 << 40;
 
     fn read_size(bytes: u64) -> ReadSize {
-        ReadSize::try_new(bytes).expect("test read sizes are non-zero")
+        ReadSize::try_new(bytes).expect("test read sizes are within the valid domain")
     }
 
     fn budget(bytes: u64) -> ByteBudget {
@@ -543,10 +587,33 @@ mod tests {
     }
 
     #[test]
-    fn read_size_preserves_its_exact_value() {
+    fn the_maximum_read_size_is_exactly_one_gibibyte() {
+        assert_eq!(ReadSize::MAX_BYTES, 1_073_741_824);
+    }
+
+    #[test]
+    fn read_size_preserves_its_exact_value_across_the_valid_domain() {
         assert_eq!(read_size(1).bytes(), 1);
         assert_eq!(read_size(4096).bytes(), 4096);
-        assert_eq!(read_size(u64::MAX).bytes(), u64::MAX);
+        assert_eq!(read_size(ReadSize::MAX_BYTES).bytes(), 1_073_741_824);
+    }
+
+    #[test]
+    fn read_size_rejects_values_above_the_maximum_with_exact_values() {
+        assert_eq!(
+            ReadSize::try_new(1_073_741_825),
+            Err(ReadSizeError::ReadSizeExceedsMaximum {
+                requested: 1_073_741_825,
+                maximum: 1_073_741_824,
+            })
+        );
+        assert_eq!(
+            ReadSize::try_new(u64::MAX),
+            Err(ReadSizeError::ReadSizeExceedsMaximum {
+                requested: u64::MAX,
+                maximum: 1_073_741_824,
+            })
+        );
     }
 
     #[test]
@@ -572,6 +639,28 @@ mod tests {
             Err(ExecutionConfigError::ReadSizeExceedsBudget {
                 read_size: 9,
                 byte_budget: 8,
+            })
+        );
+    }
+
+    #[test]
+    fn execution_config_accepts_the_maximum_read_size_with_an_equal_budget() {
+        let config = config(ReadSize::MAX_BYTES, ReadSize::MAX_BYTES);
+
+        assert_eq!(config.read_size().bytes(), ReadSize::MAX_BYTES);
+        assert_eq!(config.byte_budget().bytes(), ReadSize::MAX_BYTES);
+    }
+
+    #[test]
+    fn a_maximum_read_size_above_its_budget_is_a_budget_error_not_a_read_size_error() {
+        assert_eq!(
+            ExecutionConfig::try_new(
+                read_size(ReadSize::MAX_BYTES),
+                budget(ReadSize::MAX_BYTES - 1)
+            ),
+            Err(ExecutionConfigError::ReadSizeExceedsBudget {
+                read_size: ReadSize::MAX_BYTES,
+                byte_budget: ReadSize::MAX_BYTES - 1,
             })
         );
     }
@@ -744,6 +833,19 @@ mod tests {
             Some(span(u64::MAX - 1, u64::MAX))
         );
         assert_eq!(read_at(planned, u64::MAX), None);
+    }
+
+    #[test]
+    fn a_logical_range_above_the_maximum_read_size_splits_into_two_adjacent_reads() {
+        const MAX: u64 = ReadSize::MAX_BYTES;
+
+        let execution = execution(&[span(0, MAX + 4096)], MAX, MAX);
+        let planned = &execution.ranges()[0];
+
+        assert_eq!(planned.operation_count(), 2);
+        assert_eq!(read_at(planned, 0), Some(span(0, MAX)));
+        assert_eq!(read_at(planned, 1), Some(span(MAX, MAX + 4096)));
+        assert_eq!(read_at(planned, 2), None);
     }
 
     #[test]

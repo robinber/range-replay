@@ -558,6 +558,7 @@ impl Scheduler {
 #[cfg(test)]
 mod tests {
     use super::{OperationId, ScheduleDecision, Scheduler, SchedulerError, try_reserve_progress};
+    use crate::execution::ReadSize;
     use crate::range::ReadRange;
     use crate::test_support::{
         assert_exhausted, assert_waiting, execution, ready, scheduler_for, span,
@@ -849,13 +850,14 @@ mod tests {
     }
 
     #[test]
-    fn the_widest_single_read_is_admitted_without_overflow() {
-        let mut scheduler = scheduler(&[span(0, u64::MAX)], u64::MAX, u64::MAX);
+    fn the_widest_valid_single_read_is_admitted_under_a_maximal_budget_without_overflow() {
+        const WIDEST: u64 = ReadSize::MAX_BYTES;
+        let mut scheduler = scheduler(&[span(0, WIDEST)], WIDEST, u64::MAX);
 
         let widest = ready(&mut scheduler);
         assert_eq!(widest.id(), op(0, 0));
-        assert_eq!(widest.range(), span(0, u64::MAX));
-        assert_eq!(counters(&scheduler), (u64::MAX, 0));
+        assert_eq!(widest.range(), span(0, WIDEST));
+        assert_eq!(counters(&scheduler), (WIDEST, u64::MAX - WIDEST));
 
         assert_exhausted(&mut scheduler);
         drop(widest);

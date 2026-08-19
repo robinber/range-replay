@@ -695,7 +695,7 @@ mod tests {
         AssemblyError, OutputAssembler, destination_span, try_reserve_outputs, try_reserve_state,
     };
     use crate::completion::CompletedRead;
-    use crate::execution::ExecutionPlan;
+    use crate::execution::{ExecutionPlan, ReadSize};
     use crate::pread::read_scheduled;
     use crate::scheduler::{ScheduleDecision, Scheduler};
     use crate::test_support::{
@@ -1141,8 +1141,14 @@ mod tests {
         // buffer reservation is what must reject the request. The
         // `AssemblyError::UnrepresentableLength` variant is therefore
         // platform-conditional: it guards 32-bit targets and stays
-        // uncovered on 64-bit hosts.
-        let plan = execution(&[span(0, u64::MAX)], u64::MAX, u64::MAX);
+        // uncovered on 64-bit hosts. The logical buffer covers the whole
+        // range regardless of the read size, so a maximal valid read size
+        // still requires the unallocatable `u64::MAX`-byte reservation.
+        let plan = execution(
+            &[span(0, u64::MAX)],
+            ReadSize::MAX_BYTES,
+            ReadSize::MAX_BYTES,
+        );
 
         let error = OutputAssembler::try_new(&plan)
             .expect_err("no buffer of u64::MAX bytes can be reserved");
